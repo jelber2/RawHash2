@@ -8,13 +8,21 @@ test/data/d5_*
 test/data/d6_*
 test/data/d7_*
 test/data/d8_*
+test/data/d9_*
+test/data/d10_*
 test/data/download_d8_*
+test/data/download_d9_*
+test/data/download_d10_*
+test/evaluation/read_mapping/d8_*
+test/evaluation/read_mapping/d9_*
+test/evaluation/read_mapping/d10_*
 test/data/*/*.fa
 test/data/*/*.fasta
 test/data/*/*.tar
 test/data/*/*.tar.gz
 test/data/*/fast5_files
 test/data/*/slurm-*
+test/data/Chlamydomonas*
 
 /test/data/random_community/1_symbolic_links.sh
 

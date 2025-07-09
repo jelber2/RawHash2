@@ -6,7 +6,7 @@ THREAD=$1
 OUTDIR="./rawhash2/"
 FAST5="../../../data/d7_saureus_r104/fast5_files/"
 REF="../../../data/d7_saureus_r104/ref.fa"
-PORE="../../../../extern/kmer_models/dna_r10.4.1_e8.2_400bps/9mer_levels_v1.txt"
+PORE="../../../../extern/local_kmer_models/uncalled_r1041_model_only_means.txt"
 PRESET="sensitive"
 mkdir -p ${OUTDIR}
 

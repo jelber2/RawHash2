@@ -71,7 +71,7 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"log-num-anchors",		ko_no_argument,			359 },
 	{ (char*)"rev-collision-count", ko_required_argument, 	360 },
 	{ (char*)"chn-rev-bump", 		ko_required_argument, 	361 },
-	{ (char*)"no-rev-target",		ko_no_argument, 		362 },
+	{ (char*)"rev-query",			ko_no_argument, 		362 },
 	{ (char*)"r10",					ko_no_argument, 		363 },
 	{ (char*)"fine-min",			ko_required_argument, 	364 },
 	{ (char*)"fine-max",			ko_required_argument, 	365 },
@@ -165,6 +165,7 @@ int ri_set_opt(const char *preset, ri_idxopt_t *io, ri_mapopt_t *mo)
 
 		mo->pri_ratio = 0.0f;
 	} else if (strcmp(preset, "ava-sensitive") == 0) {
+		//default
 		io->w = 0;
 		io->diff = 0.45f;
 		mo->min_chaining_score = 75;
@@ -392,7 +393,7 @@ int main(int argc, char *argv[])
 		else if (c == 359) opt.flag |= RI_M_LOG_NUM_ANCHORS; // --log-num-anchors
 		else if (c == 360) opt.rev_col_limit = atoi(o.arg); // --rev-collision-count
 		else if (c == 361) opt.chn_rev_bump = atof(o.arg); // --chn-rev-bump
-		else if (c == 362) {ipt.flag |= RI_I_NO_REV_TARGET;}// --no-rev-target
+		// else if (c == 362) {ipt.flag |= RI_I_REV_QUERY;}// --rev-query
 		else if (c == 363) { // --r10
 			ipt.k = 9;
 
@@ -405,6 +406,14 @@ int main(int argc, char *argv[])
 			opt.peak_height = 0.2f;
 
 			opt.chain_gap_scale = 1.2f;
+
+			opt.bp_per_sec = 400;
+			ipt.bp_per_sec = 400;
+			opt.sample_rate = 5000; opt.sample_per_base = (float)opt.sample_rate / opt.bp_per_sec;
+			ipt.sample_rate = 5000; ipt.sample_per_base = (float)ipt.sample_rate / ipt.bp_per_sec;
+
+			// io->fine_range = 0.6;
+			// mo->min_mapq = 5, mo->min_chaining_score = 10, mo->chain_gap_scale = 0.6f;
 		}
 		else if (c == 364) {ipt.fine_min = atof(o.arg);}// --fine-min
 		else if (c == 365) {ipt.fine_max = atof(o.arg);}// --fine-max
@@ -436,7 +445,6 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --store-sig      Stores the target signal in the index file.\n");
 		fprintf(fp_help, "    --sig-target     The target sequence (reference) contains signals rather than base characters.\n");
 		fprintf(fp_help, "    --sig-diff FLOAT    [Advanced] Signal value (FLOAT) difference between two consecutive events to be packed together in a single hash value [%g].\n", ipt.diff);
-		fprintf(fp_help, "    --no-rev-target    [Experimental] Disable indexing the reverse-complement of a target sequence. This is a default behavior when the target sequence is signal.\n", ipt.diff);
 
 		// fprintf(fp_help, "    -n NUM     number of consecutive seeds to use for BLEND-based seeding [%d]. Enables the BLEND mechanism (may improve accuracy but reduces the performance at the moment)\n", ipt.n);
 		
@@ -551,7 +559,7 @@ int main(int argc, char *argv[])
 	pore.max_val = -5000.0;
 	pore.min_val = 5000.0;
 	if(!(ipt.flag&RI_I_OUT_QUANTIZE)){
-		if((!idx_rdr->is_idx && fpore == 0) && !(!(ipt.flag&RI_I_NO_REV_TARGET) && ipt.flag&RI_I_SIG_TARGET)){
+		if((!idx_rdr->is_idx && fpore == 0) && !(!(ipt.flag&RI_I_REV_QUERY) && ipt.flag&RI_I_SIG_TARGET)){
 			fprintf(stderr, "[ERROR] missing input: please specify a pore model file with -p when generating the index from a sequence file\n");
 			ri_idx_reader_close(idx_rdr);
 			return 1;

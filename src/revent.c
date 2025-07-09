@@ -18,7 +18,7 @@ typedef struct ri_detect_s {
 	int peak_pos;
 	float peak_value;
 	int valid_peak;
-}ri_detect_t;
+} ri_detect_t;
 
 static inline void comp_prefix_prefixsq(const float *sig,
 										const uint32_t s_len,
@@ -210,7 +210,8 @@ static inline float* gen_events(void *km,
 		if (!(peaks[pi] > 0 && peaks[pi] < s_len)) continue;
 
     	segment_length = peaks[pi] - start_idx;
-		events[i++] = calculate_mean_of_filtered_segment(sig + start_idx, segment_length);
+		if (segment_length < 500) // Skip if the segment is too long
+			events[i++] = calculate_mean_of_filtered_segment(sig + start_idx, segment_length);
 		start_idx = peaks[pi];
 	}
 
