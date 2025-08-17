@@ -14,6 +14,10 @@ We use minimap2 (v2.24) to generate the ground truth mapping information by mapp
 
 * [Minimap2 v2.24](https://github.com/lh3/minimap2/releases/tag/v2.24)
 
+**For Rawsamble-only:** We use miniasm (0.3-r179) to generate the assembly graphs from all-vs-all overlapping information provided in PAF. We use the following miniasm version:
+
+* [Minimap2 v0.3-r179](https://github.com/lh3/miniasm/releases/tag/v0.3)
+
 We use various tools to process and analyze the data we generate using each tool. The following tools must also be installed in your machine. We suggest using conda to install these tools with their specified versions as almost all of them are included in the conda repository.
 
 * [Python v3.6.15](https://www.python.org/downloads/release/python-3615/)
@@ -63,6 +67,9 @@ git clone --recursive https://github.com/skovaka/UNCALLED.git uncalled && cd unc
 
 #Downloading and compiling minimap2 v2.24
 wget https://github.com/lh3/minimap2/releases/download/v2.24/minimap2-2.24.tar.bz2; tar -xf minimap2-2.24.tar.bz2; rm minimap2-2.24.tar.bz2; mv minimap2-2.24 minimap2; cd minimap2 && make && cp minimap2 ../bin/ && cd ..
+
+#For Rawsamble only: Downloading and compiling miniasm v0.3-r179
+wget https://github.com/lh3/miniasm/archive/refs/tags/v0.3.tar.gz; tar -xzf v0.3.tar.gz; rm tar -xzf v0.3.tar.gz; cd miniasm-0.3 && make && cp miniasm ../bin/ && cd ..
 
 #Step 2 Adding binaries to PATH
 #If you are skipping Step 0 and Step 1, uncomment the following line and execute:
@@ -123,4 +130,13 @@ To start evaluating Sequence Until, enter [./evaluation/relative_abundance/seque
 
 ```bash
 cd ./evaluation/relative_abundance/sequenceuntil
+```
+## Read Overlapping (for Rawsamble)
+
+The scripts and a [README](./evaluation/rawsamble/README.md) can be found in the [rawsamble directory](./evaluation/rawsamble/) to perform all-vs-all overlapping and to generate assemblies using Rawsamble and minimap2
+
+To start performing the read overlapping and assembly evaluations, enter [./evaluation/rawsamble](./evaluation/rawsamble/)
+
+```bash
+cd ./evaluation/rawsamble
 ```

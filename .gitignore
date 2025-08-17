@@ -11,7 +11,7 @@ test/data/d8_*
 test/data/d9_*
 test/data/d10_*
 test/data/download_d8_*
-test/data/download_d9_*
+# test/data/download_d9_*
 test/data/download_d10_*
 test/evaluation/read_mapping/d8_*
 test/evaluation/read_mapping/d9_*
@@ -85,7 +85,19 @@ src/*.o
 
 extern/pod5*
 
-test/evaluation/rawsamble/
+test/evaluation/rawsamble/*/*.err
+test/evaluation/rawsamble/*/*.out
+test/evaluation/rawsamble/*/*.paf
+test/evaluation/rawsamble/*/*.time
+test/evaluation/rawsamble/*/*slurm*
+test/evaluation/rawsamble/*/rawsamble*
+test/evaluation/rawsamble/*/run_minimap2.sh
+test/evaluation/rawsamble/d1_sars-cov-2_r94
+test/evaluation/rawsamble/d5_human_na12878_r94
+test/evaluation/rawsamble/d6_ecoli_r104
+test/evaluation/rawsamble/d8_human_hg002_r1041
+test/evaluation/rawsamble/d10_dmelanogaster_r1041
+test/evaluation/rawsamble/run_params.sh
 
 extern/tensorflow/
 
