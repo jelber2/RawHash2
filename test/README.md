@@ -54,7 +54,15 @@ wget -qO- https://ftp-trace.ncbi.nlm.nih.gov/sra/sdk/3.0.1/sratoolkit.3.0.1-ubun
 
 #Step 1 Compiling the tools
 #Cloning and compiling RawHash2
-git clone --recursive https://github.com/CMU-SAFARI/RawHash.git rawhash2 && cd rawhash2 && make && cp ./bin/rawhash2 ../bin/ && cd ..
+#Recommended: using CMake (by default compiles with POD5 support only)
+git clone --recursive https://github.com/STORMgroup/RawHash2.git rawhash2 && cd rawhash2 && make cmake && cp ./bin/rawhash2 ../bin/ && cd ..
+
+#Alternative: using Make only (no CMake required)
+# git clone --recursive https://github.com/STORMgroup/RawHash2.git rawhash2 && cd rawhash2 && make && cp ./bin/rawhash2 ../bin/ && cd ..
+
+#If you need HDF5 or SLOW5 support:
+# CMake:  cd rawhash2 && make cmake CMAKE_OPTS="-DENABLE_HDF5=ON -DENABLE_SLOW5=ON" && cp ./bin/rawhash2 ../bin/ && cd ..
+# Make:   cd rawhash2 && make NOHDF5=0 NOSLOW5=0 && cp ./bin/rawhash2 ../bin/ && cd ..
 
 #Cloning and compiling RawHash
 wget -qO- https://github.com/CMU-SAFARI/RawHash/releases/download/v1.0/RawHash-1.0.tar.gz | tar -xzv && cd rawhash && make && cp ./bin/rawhash ../bin/ && cd ..

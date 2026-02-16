@@ -924,19 +924,19 @@ ri_idx_t* ri_idx_gen(mm_bseq_file_t* fp, ri_pore_t* pore, float diff, int b, int
 	return pl.ri;
 }
 
-ri_idx_t* ri_idx_siggen(ri_sig_file_t** fp, char **f, int &cur_f, int n_f, ri_pore_t* pore, float diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, uint32_t window_length1, uint32_t window_length2, float threshold1, float threshold2, float peak_height, int flag, int mini_batch_size, int n_threads, int io_n_threads, uint64_t batch_size)
+ri_idx_t* ri_idx_siggen(ri_sig_file_t** fp, char **f, int *cur_f, int n_f, ri_pore_t* pore, float diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, uint32_t window_length1, uint32_t window_length2, float threshold1, float threshold2, float peak_height, int flag, int mini_batch_size, int n_threads, int io_n_threads, uint64_t batch_size)
 {
 	if(!(flag&RI_I_SIG_TARGET)) return 0;
 
 	pipeline_t pl;
-	if (fp == 0 || *fp == 0 || n_f <= 0 || cur_f > n_f || (cur_f == n_f && (*fp)->cur_read >= (*fp)->num_read) || ((!pore || !pore->pore_vals) && !(flag&RI_I_OUT_QUANTIZE))) return 0;
+	if (fp == 0 || *fp == 0 || n_f <= 0 || *cur_f > n_f || (*cur_f == n_f && (*fp)->cur_read >= (*fp)->num_read) || ((!pore || !pore->pore_vals) && !(flag&RI_I_OUT_QUANTIZE))) return 0;
 	memset(&pl, 0, sizeof(pipeline_t));
 	pl.mini_batch_size = (uint64_t)mini_batch_size < batch_size? mini_batch_size : batch_size;
 	pl.batch_size = batch_size;
 	pl.sfp = *fp;
 	pl.sf = f;
 	pl.n_f = n_f;
-	pl.cur_f = cur_f;
+	pl.cur_f = *cur_f;
 	pl.ri = ri_idx_init(diff, b, w, e, n, q, k, fine_min, fine_max, fine_range, flag);
 
 	if(!(pl.ri->flag&RI_I_OUT_QUANTIZE)){
@@ -960,7 +960,7 @@ ri_idx_t* ri_idx_siggen(ri_sig_file_t** fp, char **f, int &cur_f, int n_f, ri_po
 	kt_pipeline(n_threads < n_steps? n_threads : n_steps, worker_sig_pipeline, &pl, n_steps);
 
 	*fp = pl.sfp;
-	cur_f = pl.cur_f;
+	*cur_f = pl.cur_f;
 
 	if(pl.ri->flag&RI_I_OUT_QUANTIZE) {ri_idx_destroy(pl.ri); pl.ri = 0;}
 	else ri_idx_post(pl.ri, n_threads);
@@ -974,7 +974,7 @@ ri_idx_t* ri_idx_reader_read(ri_idx_reader_t* r, ri_pore_t* pore, int n_threads,
 	if (r->is_idx) {
 		ri = ri_idx_load(r->fp.idx);
 	} else if(r->opt.flag&RI_I_SIG_TARGET) {
-		ri = ri_idx_siggen(&(r->sfp), r->sf, r->cur_f, r->n_f, pore, r->opt.diff, r->opt.b, r->opt.w, r->opt.e, r->opt.n, r->opt.q, r->opt.k, r->opt.fine_min, r->opt.fine_max, r->opt.fine_range, r->opt.window_length1, r->opt.window_length2, r->opt.threshold1, r->opt.threshold2, r->opt.peak_height, r->opt.flag, r->opt.mini_batch_size, n_threads, io_n_threads, r->opt.batch_size);
+		ri = ri_idx_siggen(&(r->sfp), r->sf, &r->cur_f, r->n_f, pore, r->opt.diff, r->opt.b, r->opt.w, r->opt.e, r->opt.n, r->opt.q, r->opt.k, r->opt.fine_min, r->opt.fine_max, r->opt.fine_range, r->opt.window_length1, r->opt.window_length2, r->opt.threshold1, r->opt.threshold2, r->opt.peak_height, r->opt.flag, r->opt.mini_batch_size, n_threads, io_n_threads, r->opt.batch_size);
 	} else{
 		ri = ri_idx_gen(r->fp.seq, pore, r->opt.diff, r->opt.b, r->opt.w, r->opt.e, r->opt.n, r->opt.q, r->opt.k, r->opt.fine_min, r->opt.fine_max, r->opt.fine_range, r->opt.flag, r->opt.mini_batch_size, n_threads, io_n_threads, r->opt.batch_size);
 	}

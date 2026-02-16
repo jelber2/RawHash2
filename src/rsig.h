@@ -77,7 +77,7 @@ void ri_sig_close(ri_sig_file_t *fp);
  * @return		a struct that includes the file pointer to the opened signal file
  * 				Returned struct (and its variables) is allocated in this function.
  */
-ri_sig_file_t *open_sig(const char *fn, int io_n_threads = 1);
+ri_sig_file_t *open_sig(const char *fn, int io_n_threads);
 
 /**
  * Opens all the signal files (e.g., FAST5 files)
@@ -88,7 +88,7 @@ ri_sig_file_t *open_sig(const char *fn, int io_n_threads = 1);
  * @return		List of structs that include the file pointers to each opened signal file
  * 				Returned structs (and their variables) are allocated in this function.
  */
-ri_sig_file_t **open_sigs(int n, const char **fn, int io_n_threads = 1);
+ri_sig_file_t **open_sigs(int n, const char **fn, int io_n_threads);
 
 /**
  * Converts the sequence into its expected event values
@@ -118,7 +118,7 @@ void ri_seq_to_sig(const char *str,
  * 				$s->sig = signal values
  * 				$s->l_sig = number of signal values
  */
-void ri_read_sig(ri_sig_file_t* fp, ri_sig_t* s, int io_n_threads = 1);
+void ri_read_sig(ri_sig_file_t* fp, ri_sig_t* s, int io_n_threads);
 
 /**
  * Recursively find all files that ends with "fast5" under input directory const char *A

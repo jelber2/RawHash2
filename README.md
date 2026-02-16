@@ -6,9 +6,9 @@
     <img width="75%" src="./gitfigures/rawsamble.png">
 </p>
 
-# RawHash and Rawsamble Overview
+# RawHash2 Overview
 
-RawHash (and RawHash2) is a hash-based mechanism to map raw nanopore signals to a reference genome in real-time. To achieve this, it 1) generates an index from the reference genome and 2) efficiently and accurately maps the raw signals to the reference genome such that it can match the throughput of nanopore sequencing even when analyzing large genomes (e.g., human genome.
+RawHash2 is a hash-based mechanism to map raw nanopore signals to a reference genome in real-time. To achieve this, it 1) generates an index from the reference genome and 2) efficiently and accurately maps the raw signals to the reference genome such that it can match the throughput of nanopore sequencing even when analyzing large genomes (e.g., human genome.
 
 Rawsamble is a mechanism that finds overlaps betweel raw signals without a reference genome (all-vs-all overlapping). The overlap information is generated in a PAF output and can be used by assemblers such as `miniasm` to construct *de novo* assemblies.
 
@@ -32,7 +32,7 @@ RawHash performs real-time mapping of nanopore raw signals. When the prefix of r
 
 * We have integrated the signal alignment functionality with DTW as proposed in RawAlign (see the citation below). The parameters may still not be highly optimized as this is still in experimental stage. Use it with caution.
 
-* rmap.c is now rmap.cpp (needs to be compiled with C++) due to the recent DTW integration. We are planning to make it a C-compatible implementation again.
+* All RawHash source code is now written in C. When compiling with POD5 or HDF5, sources are compiled as C++ to satisfy the requirements of those external libraries.
 
 * We have released RawHash2, a more sensitive and faster raw signal mapping mechanism with substantial improvements over RawHash. RawHash2 is available within this repository. You can still use the earlier version, RawHash v1, from [this release](https://github.com/CMU-SAFARI/RawHash/releases/tag/v1.0).
 
@@ -40,44 +40,138 @@ RawHash performs real-time mapping of nanopore raw signals. When the prefix of r
 
 # Installation
 
+## Quick Start
+
 * Clone the code from its GitHub repository (`--recursive` must be used):
 
 ```bash
-git clone --recursive https://github.com/CMU-SAFARI/RawHash.git rawhash2
+git clone --recursive https://github.com/STORMgroup/RawHash2.git rawhash2
+cd rawhash2
 ```
 
-* Compile (Make sure you have a C++ compiler and GNU make):
+* **Recommended: Build with CMake** (requires CMake 3.16+, a C++11 compiler, and GNU Make):
 
 ```bash
-cd rawhash2 && make
+make cmake
 ```
 
-If the compilation is successful, the path to the binary will be `bin/rawhash2`.
+* **Alternative: Build with Make only** (no CMake required):
+
+```bash
+make
+```
+
+Both methods produce the binary at `bin/rawhash2`. By default, RawHash2 compiles with **POD5 support only**. To enable HDF5/FAST5 or SLOW5/BLOW5 support, see the section below.
 
 ## Compiling with HDF5, SLOW5, and POD5
 
-We are aware that some of the pre-compiled libraries (e.g., POD5) may not work in your system and you may need to compile these libraries from scratch. Additionally, it may be possible that you may not want to compile any of the HDF5, SLOW5, or POD5 libraries if you are not going to use them. RawHash2 provides a flexible Makefile to enable custom compilation of these libraries.
+RawHash2 provides two build systems. The recommended approach is CMake, which provides the most flexibility. The standalone Makefile is an alternative for systems without CMake.
 
-* It is possible to provide your own include and lib directories for *any* of the HDF5, SLOW5, and POD5 libraries, if you do not want to use the source code or the pre-compiled binaries that come with RawHash2. To use your own include and lib directories you should pass them to `make` when compiling as follows:
+### Using CMake (Recommended)
+
+**Default build** (POD5 only):
 
 ```bash
-#Provide the path to all of the HDF5/SLOW5/POD5 include and lib directories during compilation
-make HDF5_INCLUDE_DIR=/path/to/hdf5/include HDF5_LIB_DIR=/path/to/hdf5/lib \
-	 SLOW5_INCLUDE_DIR=/path/to/slow5/include SLOW5_LIB_DIR=/path/to/slow5/lib \
-	 POD5_INCLUDE_DIR=/path/to/pod5/include POD5_LIB_DIR=/path/to/pod5/lib
-
-#Provide the path to only POD5 include and lib directories during compilation
-make POD5_INCLUDE_DIR=/path/to/pod5/include POD5_LIB_DIR=/path/to/pod5/lib
+make cmake
 ```
 
-* It is possible to disable compiling *any* of the HDF5, SLOW5, and POD5 libraries. To disable them, you can use the following variables
+**Enable additional formats:**
 
 ```bash
-#Disables compiling HDF5
-make NOHDF5=1
+# Enable all three formats (HDF5, SLOW5, POD5)
+make cmake CMAKE_OPTS="-DENABLE_HDF5=ON -DENABLE_SLOW5=ON"
 
-#Disables compiling SLOW5 and POD5
-make NOSLOW5=1 NOPOD5=1
+# Enable only HDF5 and POD5
+make cmake CMAKE_OPTS="-DENABLE_HDF5=ON"
+
+# Enable only SLOW5 and POD5
+make cmake CMAKE_OPTS="-DENABLE_SLOW5=ON"
+
+# Disable POD5, enable HDF5 and SLOW5
+make cmake CMAKE_OPTS="-DENABLE_HDF5=ON -DENABLE_SLOW5=ON -DENABLE_POD5=OFF"
+```
+
+**Debug, profiling, and sanitizer builds:**
+
+```bash
+# Debug build with debug symbols (-O2 -g)
+make cmake CMAKE_OPTS="-DCMAKE_BUILD_TYPE=Debug"
+
+# Enable profiling (-g -fno-omit-frame-pointer -DPROFILERH=1)
+make cmake CMAKE_OPTS="-DENABLE_PROFILING=ON"
+
+# Enable AddressSanitizer
+make cmake CMAKE_OPTS="-DENABLE_ASAN=ON"
+
+# Enable ThreadSanitizer
+make cmake CMAKE_OPTS="-DENABLE_TSAN=ON"
+
+# Combine options
+make cmake CMAKE_OPTS="-DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON -DENABLE_HDF5=ON"
+```
+
+**Or invoke CMake directly** for full control:
+
+```bash
+mkdir build && cd build
+cmake -DENABLE_HDF5=ON -DENABLE_SLOW5=ON ..
+cmake --build . -j4
+cp src/rawhash2 ../bin/
+```
+
+**Use system-installed HDF5** instead of building from submodule:
+
+```bash
+make cmake CMAKE_OPTS="-DENABLE_HDF5=ON -DUSE_SYSTEM_HDF5=ON"
+```
+
+### Using Make (No CMake Required)
+
+**Default build** (POD5 only):
+
+```bash
+make
+```
+
+**Disable/enable formats:**
+
+```bash
+# Disable POD5 (compile with no external signal format libraries)
+make NOPOD5=1
+
+# Enable HDF5 along with POD5
+make NOHDF5=0
+
+# Enable SLOW5 along with POD5
+make NOSLOW5=0
+
+# Enable all formats
+make NOHDF5=0 NOSLOW5=0
+```
+
+**Debug, profiling, and sanitizer builds:**
+
+```bash
+# Debug build with AddressSanitizer (-O2 -fsanitize=address -g)
+make DEBUG=1
+
+# Enable profiling (-g -fno-omit-frame-pointer -DPROFILERH=1)
+make PROFILE=1
+
+# Enable AddressSanitizer without full debug mode
+make asan=1
+
+# Enable ThreadSanitizer
+make tsan=1
+
+# Combine options
+make DEBUG=1 NOHDF5=0
+```
+
+**Rebuild without recompiling external dependencies:**
+
+```bash
+make subset
 ```
 
 # Usage
@@ -274,5 +368,3 @@ If you use RawAlign (i.e., the alignment functionality integrated in RawHash2) p
 # Acknowledgement
 
 RawHash2 uses [klib](https://github.com/attractivechaos/klib), some code snippets from [Minimap2](https://github.com/lh3/minimap2) (e.g., pipelining, hash table usage, DP and RMQ-based chaining) and the R9.4 segmentation parameters from [Sigmap](https://github.com/haowenz/sigmap). RawHash2 uses the DTW integration as proposed in RawAlign (please see the citation details above).
-
-We thank [Melina Soysal](https://github.com/melina2200) and [Marie-Louise Dugua](https://github.com/MarieSarahLouise) for their feedback to improve the RawHash implementation and test scripts.

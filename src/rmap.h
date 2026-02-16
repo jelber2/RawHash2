@@ -77,7 +77,7 @@ typedef struct step_ms{
  * 
  * @return		returns 0 if mapping is completed with no issues. -1, otherwise.
  */
-int ri_map_file(const ri_idx_t *idx, const char *fn, const ri_mapopt_t *opt, int n_threads, int io_n_threads = 1);
+int ri_map_file(const ri_idx_t *idx, const char *fn, const ri_mapopt_t *opt, int n_threads, int io_n_threads);
 
 /**
  * Map raw nanopore signals of many reads to a reference genome
@@ -91,7 +91,7 @@ int ri_map_file(const ri_idx_t *idx, const char *fn, const ri_mapopt_t *opt, int
  * 
  * @return			returns 0 if mapping is completed with no issues. -1, otherwise.
  */
-int ri_map_file_frag(const ri_idx_t *idx, int n_segs, const char **fn, const ri_mapopt_t *opt, int n_threads, int io_n_threads = 1);
+int ri_map_file_frag(const ri_idx_t *idx, int n_segs, const char **fn, const ri_mapopt_t *opt, int n_threads, int io_n_threads);
 
 #ifdef __cplusplus
 }

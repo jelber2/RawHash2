@@ -233,7 +233,7 @@ int ri_mapopt_parse_dtw_fill_method(ri_mapopt_t *opt, char* arg) {
         opt->dtw_fill_method = RI_M_DTW_FILL_METHOD_FULL;
     } else if (strncmp(arg, "banded=", 7) == 0) {
         opt->dtw_fill_method = RI_M_DTW_FILL_METHOD_BANDED;
-        opt->dtw_band_radius_frac = std::atof(arg + 7);
+        opt->dtw_band_radius_frac = atof(arg + 7);
     } else {
         return -1;
     }

@@ -1,255 +1,431 @@
-#pass DEBUG=1 to make to enable debugging
-ifdef DEBUG
-	CFLAGS=-Wall -O2 -fsanitize=address -g -Wc++-compat -march=native -pthread -DHAVE_KALLOC
-	CPPFLAGS=--std=c++11 -Wall -O2 -fsanitize=address -g -march=native -pthread -DHAVE_KALLOC
-else
-	CFLAGS=-Wall -O3 -Wc++-compat -march=native -pthread -DHAVE_KALLOC
-	CPPFLAGS=-std=c++11 -Wall -O3 -march=native -pthread -DHAVE_KALLOC
-endif
+# src/Makefile - Standalone build for RawHash2
+#
+# Defaults: POD5=enabled, HDF5=disabled, SLOW5=disabled
+#
+# Options:
+#   DEBUG=1     Debug build (-O2 -fsanitize=address -g)
+#   PROFILE=1   Profiling build (-g -fno-omit-frame-pointer -DPROFILERH=1)
+#   NOPOD5=1    Disable POD5 support
+#   NOHDF5=0    Enable HDF5/FAST5 support (disabled by default)
+#   NOSLOW5=0   Enable SLOW5/BLOW5 support (disabled by default)
+#   asan=1      Enable AddressSanitizer
+#   tsan=1      Enable ThreadSanitizer
 
-#pass PROFILE=1 to make to enable profiling
-ifdef PROFILE
-	CFLAGS+=-g -fno-omit-frame-pointer -march=native -DPROFILERH=1
-	CPPFLAGS+=-g -fno-omit-frame-pointer -march=native -DPROFILERH=1
-endif
+# =====================================================================
+# Default feature toggles (match CMake defaults)
+# POD5 is ON by default (set NOPOD5=1 to disable)
+# HDF5 is OFF by default (set NOHDF5= or NOHDF5=0 to enable)
+# SLOW5 is OFF by default (set NOSLOW5= or NOSLOW5=0 to enable)
+# =====================================================================
+NOHDF5  ?= 1
+NOSLOW5 ?= 1
 
-OBJS= kthread.o kalloc.o bseq.o roptions.o sequence_until.o rutils.o rsig.o revent.o rsketch.o rindex.o lchain.o rseed.o rmap.o dtw.o hit.o main.o
-
-CXX_COMPILER_VERSION ?= $(shell $(CXX) -dumpversion)
+# =====================================================================
+# System detection
+# =====================================================================
+SYSTEM_NAME      ?= $(shell uname -s)
 SYSTEM_PROCESSOR ?= $(shell uname -m)
-SYSTEM_NAME ?= $(shell uname -s)
 
-WORKDIR = $(shell pwd)/../extern
+# =====================================================================
+# Directories
+# =====================================================================
+SRCDIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+WORKDIR := $(abspath $(SRCDIR)/../extern)
 
-POD5_VERSION = 0.3.10
-POD5_URLDIR = pod5-$(POD5_VERSION)-$(SYSTEM_NAME)
-POD5_REPO = https://github.com/nanoporetech/pod5-file-format
-ifdef POD5_INCLUDE_DIR
-	POD5_DOWNLOAD = 0
+# =====================================================================
+# Compiler selection
+# When POD5 or HDF5 is enabled, ALL .c files must be compiled as C++:
+#   - rsig.c contains C++ code (std::string, new, etc.) in #ifndef NHDF5RH
+#   - POD5 static libs (libarrow.a) require C++ linker
+# When neither is enabled, pure C compilation suffices.
+# =====================================================================
+NEED_CXX := 0
+ifneq ($(NOPOD5),1)
+    NEED_CXX := 1
 endif
-POD5_INCLUDE_DIR ?= $(WORKDIR)/$(POD5_URLDIR)/include
+ifneq ($(NOHDF5),1)
+    NEED_CXX := 1
+endif
 
-ifeq ($(SYSTEM_NAME),Linux)
-    POD5_LIB ?= lib64
-    ifeq ($(shell echo $(SYSTEM_PROCESSOR) | grep -E '^(aarch64|arm)'),)
-        POD5_URL = $(POD5_REPO)/releases/download/$(POD5_VERSION)/lib_pod5-$(POD5_VERSION)-linux-x64.tar.gz
-    else ifeq ($(shell expr $(CXX_COMPILER_VERSION) \< 9.0),1)
-        POD5_URLDIR = pod5-$(POD5_VERSION)-$(SYSTEM_NAME)
-        POD5_URL = $(POD5_REPO)/releases/download/$(POD5_VERSION)/lib_pod5-$(POD5_VERSION)-linux-gcc7-arm64.tar.gz
-        POD5_LIB ?= lib
-    else
-        POD5_URLDIR = pod5-$(POD5_VERSION)-$(SYSTEM_NAME)
-        POD5_URL = $(POD5_REPO)/releases/download/$(POD5_VERSION)/lib_pod5-$(POD5_VERSION)-linux-arm64.tar.gz
+ifeq ($(NEED_CXX),1)
+    COMPILER    = $(CXX)
+    LANG_STD    = -std=c++11
+    LANG_MODE   = -x c++
+    COMPAT_WARN =
+else
+    COMPILER    = $(CC)
+    LANG_STD    = -std=c99
+    LANG_MODE   =
+    COMPAT_WARN = -Wc++-compat
+endif
+
+# =====================================================================
+# Base compiler flags
+# =====================================================================
+BASE_DEFS = -DHAVE_KALLOC
+
+ifdef DEBUG
+    OPT_FLAGS = -O2 -fsanitize=address -g
+else
+    OPT_FLAGS = -O3
+endif
+
+ifdef PROFILE
+    OPT_FLAGS += -g -fno-omit-frame-pointer
+    BASE_DEFS += -DPROFILERH=1
+endif
+
+# =====================================================================
+# Architecture-specific flags
+# =====================================================================
+ARCH_FLAGS =
+ARCH_DEFS  =
+
+# --- x86 / x86_64 ---
+ifneq ($(filter x86_64 i686 i386,$(SYSTEM_PROCESSOR)),)
+    ARCH_FLAGS += -march=native
+    # Detect immintrin.h availability
+    HAVE_IMMINTRIN := $(shell echo '\#include <immintrin.h>' | \
+        $(if $(filter 1,$(NEED_CXX)),$(CXX),$(CC)) -x c -fsyntax-only - 2>/dev/null && echo 1 || echo 0)
+    ifeq ($(HAVE_IMMINTRIN),1)
+        ARCH_DEFS += -DHAVE_IMMINTRIN_H
     endif
-	POD5_LIB_DIR ?= $(WORKDIR)/$(POD5_URLDIR)/$(POD5_LIB)
-    POD5_LIBRARIES ?= $(POD5_LIB_DIR)/libpod5_format.a \
-                     $(POD5_LIB_DIR)/libarrow.a \
-                     $(POD5_LIB_DIR)/libjemalloc_pic.a
 endif
 
-ifeq ($(SYSTEM_NAME),Darwin)
-    POD5_URL = $(POD5_REPO)/releases/download/$(POD5_VERSION)/lib_pod5-$(POD5_VERSION)-osx-11.0-arm64.tar.gz
-	POD5_LIB_DIR ?= $(WORKDIR)/$(POD5_URLDIR)/lib
-    POD5_LIBRARIES ?= $(POD5_LIB_DIR)/libpod5_format.a \
-                     $(POD5_LIB_DIR)/libarrow.a
+# --- AArch64 (arm64) ---
+ifneq ($(filter aarch64 arm64 ARM64,$(SYSTEM_PROCESSOR)),)
+    ARCH_FLAGS += -fsigned-char
+    ARCH_DEFS  += -D_FILE_OFFSET_BITS=64
+    # -march=native may not work on all Apple Silicon toolchains
+    MARCH_OK := $(shell $(if $(filter 1,$(NEED_CXX)),$(CXX),$(CC)) -march=native -x c -c /dev/null -o /dev/null 2>/dev/null && echo 1 || echo 0)
+    ifeq ($(MARCH_OK),1)
+        ARCH_FLAGS += -march=native
+    endif
 endif
 
-ifeq ($(SYSTEM_NAME),Windows_NT)
-    POD5_URL = $(POD5_REPO)/releases/download/$(POD5_VERSION)/lib_pod5-$(POD5_VERSION)-win
+# --- ARM 32-bit ---
+ifneq ($(filter arm armv7l armv6l,$(SYSTEM_PROCESSOR)),)
+    ARCH_FLAGS += -fsigned-char -mfpu=neon
+    ARCH_DEFS  += -D_FILE_OFFSET_BITS=64
+    MARCH_OK := $(shell $(CC) -march=native -x c -c /dev/null -o /dev/null 2>/dev/null && echo 1 || echo 0)
+    ifeq ($(MARCH_OK),1)
+        ARCH_FLAGS += -march=native
+    endif
 endif
 
-HDF5_DIR ?= ${WORKDIR}/hdf5/
-HDF5_BUILD_DIR ?= ${HDF5_DIR}/build
-ifdef HDF5_INCLUDE_DIR
-	HDF5_COMPILE = 0
-endif
-HDF5_INCLUDE_DIR ?= ${HDF5_BUILD_DIR}/include
-HDF5_LIB_DIR ?= ${HDF5_BUILD_DIR}/lib
-HDF5_LIB ?= hdf5
-
-SLOW5_DIR ?= ${WORKDIR}/slow5lib/
-ifdef SLOW5_INCLUDE_DIR
-	SLOW5_COMPILE = 0
-endif
-SLOW5_INCLUDE_DIR ?= ${SLOW5_DIR}/include
-SLOW5_LIB_DIR ?= ${SLOW5_DIR}/lib
-
-#pass NOPOD5=1 to make to disable compiling with POD5
-ifeq ($(NOPOD5),1)
-	CFLAGS+=-DNPOD5RH=1
-	CPPFLAGS+=-DNPOD5RH=1
-else
-	INCLUDES+=-I${POD5_INCLUDE_DIR}
-	LIBS+=-L${WORKDIR}/zstd/lib/ ${POD5_LIBRARIES} -lzstd
-endif
-
-#pass NOHDF5=1 to make to disable compiling with HDF5
-ifeq ($(NOHDF5),1)
-	CFLAGS+=-DNHDF5RH=1
-	CPPFLAGS+=-DNHDF5RH=1
-else
-	INCLUDES+=-I${HDF5_INCLUDE_DIR}
-	LIBS+=${HDF5_LIB_DIR}/lib${HDF5_LIB}.a 
-endif
-
-#pass NOSLOW5=1 to make to disable compiling with SLOW5
-ifeq ($(NOSLOW5),1)
-	CFLAGS+=-DNSLOW5RH=1
-	CPPFLAGS+=-DNSLOW5RH=1
-else
-	INCLUDES+=-I${SLOW5_INCLUDE_DIR}
-	LIBS+=${SLOW5_LIB_DIR}/libslow5.a
-endif
-
-LIBS+=-lm -lz -ldl 
-
-PROG=rawhash2
-
-ifneq ($(aarch64),)
-	arm_neon=1
-endif
-
-ifneq ($(arm_neon),) # if arm_neon is defined
-ifeq ($(aarch64),)	#if aarch64 is not defined
-	CFLAGS+=-D_FILE_OFFSET_BITS=64 -mfpu=neon -fsigned-char
-else				#if aarch64 is defined
-	CFLAGS+=-D_FILE_OFFSET_BITS=64 -fsigned-char
-endif
-endif
-
+# =====================================================================
+# Sanitizer flags (standalone, outside DEBUG)
+# =====================================================================
 ifneq ($(asan),)
-	CFLAGS+=-fsanitize=address
-	LIBS+=-fsanitize=address
+    OPT_FLAGS     += -fsanitize=address
+    EXTRA_LDFLAGS += -fsanitize=address
 endif
 
 ifneq ($(tsan),)
-	CFLAGS+=-fsanitize=thread
-	LIBS+=-fsanitize=thread
+    OPT_FLAGS     += -fsanitize=thread
+    EXTRA_LDFLAGS += -fsanitize=thread
 endif
 
-.PHONY: all subset clean help
+# =====================================================================
+# Combined compiler flags
+# =====================================================================
+ALL_FLAGS = $(LANG_STD) -Wall $(COMPAT_WARN) $(OPT_FLAGS) $(ARCH_FLAGS) \
+            $(BASE_DEFS) $(ARCH_DEFS) -pthread
 
-all: zstd hdf5 slow5 pod5 check_hdf5 check_slow5 check_pod5 $(PROG) ## Build RawHash with HDF5, SLOW5, and POD5
-subset: check_zstd check_pod5 check_slow5 check_hdf5 $(PROG) ## Build RawHash without recompiling HDF5, SLOW5, and POD5
+# =====================================================================
+# POD5 configuration (v0.3.36)
+# =====================================================================
+POD5_VERSION = 0.3.36
+POD5_REPO    = https://github.com/nanoporetech/pod5-file-format
 
-help: ##Show help
-	@echo "Set PROFILE=1 to enable profiling"
-	@echo "Set DEBUG=1 to enable debugging"
-	@echo
-	@echo "Set NOHDF5=1 to disable compiling with HDF5 (note that at least one of HDF5, SLOW5, and POD5 must be enabled)"
-	@echo "Set NOSLOW5=1 to disable compiling with SLOW5 (note that at least one of HDF5, SLOW5, and POD5 must be enabled)"
-	@echo "Set NOPOD5=1 to disable compiling with POD5 (note that at least one of HDF5, SLOW5, and POD5 must be enabled)"
-	@echo
-	@echo "use \"make subset\" to prevent compiling HDF5, SLOW5, and POD5 libraries from scratch if they are already built"
-	@echo "use \"make clean\" to remove all generated files"
-	
-check_zstd:
-	@if [ "$(NOPOD5)" != "1" ]; then \
-		[ -f "${WORKDIR}/zstd/lib/libzstd.so" ] || { echo "ZSTD library not found" >&2; exit 1; }; \
+ifneq ($(NOPOD5),1)
+    # Platform-specific URL and library directory
+    ifeq ($(SYSTEM_NAME),Linux)
+        ifneq ($(filter aarch64 arm64 ARM64,$(SYSTEM_PROCESSOR)),)
+            POD5_ARCHIVE = lib_pod5-$(POD5_VERSION)-linux-arm64.tar.gz
+        else
+            POD5_ARCHIVE = lib_pod5-$(POD5_VERSION)-linux-x64.tar.gz
+        endif
+        POD5_LIB_SUBDIR      = lib64
+        POD5_EXTRA_LIBS_FILE = libjemalloc_pic.a
+    else ifeq ($(SYSTEM_NAME),Darwin)
+        ifneq ($(filter arm64 ARM64 aarch64,$(SYSTEM_PROCESSOR)),)
+            POD5_ARCHIVE = lib_pod5-$(POD5_VERSION)-osx-14.0-arm64.tar.gz
+        else
+            $(error POD5 $(POD5_VERSION) has no pre-built binaries for macOS x86_64. Use NOPOD5=1.)
+        endif
+        POD5_LIB_SUBDIR      = lib
+        POD5_EXTRA_LIBS_FILE =
+    endif
+
+    POD5_URL = $(POD5_REPO)/releases/download/$(POD5_VERSION)/$(POD5_ARCHIVE)
+    POD5_DIR = $(WORKDIR)/pod5-$(POD5_VERSION)-$(SYSTEM_NAME)
+
+    # Allow user to override include/lib paths (skip download if set)
+    ifdef POD5_INCLUDE_DIR
+        POD5_DOWNLOAD = 0
+    endif
+    POD5_INCLUDE_DIR ?= $(POD5_DIR)/include
+    POD5_LIB_DIR     ?= $(POD5_DIR)/$(POD5_LIB_SUBDIR)
+
+    POD5_LIBRARIES = $(POD5_LIB_DIR)/libpod5_format.a \
+                     $(POD5_LIB_DIR)/libarrow.a
+    ifneq ($(POD5_EXTRA_LIBS_FILE),)
+        POD5_LIBRARIES += $(POD5_LIB_DIR)/$(POD5_EXTRA_LIBS_FILE)
+    endif
+
+    INCLUDES += -I$(POD5_INCLUDE_DIR)
+    LIBS     += $(POD5_LIBRARIES)
+else
+    ALL_FLAGS += -DNPOD5RH=1
+endif
+
+# =====================================================================
+# HDF5 configuration
+# =====================================================================
+HDF5_DIR       ?= $(WORKDIR)/hdf5
+HDF5_BUILD_DIR ?= $(HDF5_DIR)/build
+
+ifdef HDF5_INCLUDE_DIR
+    HDF5_COMPILE = 0
+endif
+HDF5_INCLUDE_DIR ?= $(HDF5_BUILD_DIR)/include
+HDF5_LIB_DIR     ?= $(HDF5_BUILD_DIR)/lib
+HDF5_LIB         ?= hdf5
+
+ifneq ($(NOHDF5),1)
+    INCLUDES += -I$(HDF5_INCLUDE_DIR)
+    LIBS     += $(HDF5_LIB_DIR)/lib$(HDF5_LIB).a
+else
+    ALL_FLAGS += -DNHDF5RH=1
+endif
+
+# =====================================================================
+# SLOW5 configuration
+# =====================================================================
+SLOW5_DIR ?= $(WORKDIR)/slow5lib
+
+ifdef SLOW5_INCLUDE_DIR
+    SLOW5_COMPILE = 0
+endif
+SLOW5_INCLUDE_DIR ?= $(SLOW5_DIR)/include
+SLOW5_LIB_DIR     ?= $(SLOW5_DIR)/lib
+
+ifneq ($(NOSLOW5),1)
+    INCLUDES += -I$(SLOW5_INCLUDE_DIR)
+    LIBS     += $(SLOW5_LIB_DIR)/libslow5.a
+else
+    ALL_FLAGS += -DNSLOW5RH=1
+endif
+
+# =====================================================================
+# zstd configuration (needed by both POD5 and SLOW5)
+# =====================================================================
+ZSTD_STATIC =
+ifneq ($(NOPOD5),1)
+    ZSTD_STATIC = $(WORKDIR)/zstd/lib/libzstd.a
+endif
+ifneq ($(NOSLOW5),1)
+    ZSTD_STATIC = $(WORKDIR)/zstd/lib/libzstd.a
+endif
+LIBS += $(ZSTD_STATIC)
+
+# =====================================================================
+# System libraries (must come after static libs for correct link order)
+# =====================================================================
+LIBS += -lm -lz $(EXTRA_LDFLAGS)
+ifeq ($(SYSTEM_NAME),Linux)
+    LIBS += -ldl
+endif
+
+# =====================================================================
+# Source files and objects
+# =====================================================================
+SRCS = kthread.c kalloc.c bseq.c roptions.c sequence_until.c rutils.c \
+       rsig.c revent.c rsketch.c rindex.c lchain.c rseed.c rmap.c \
+       dtw.c hit.c main.c
+
+OBJS = $(SRCS:.c=.o)
+
+PROG = rawhash2
+
+# =====================================================================
+# Determine which external dependencies need building
+# =====================================================================
+EXT_TARGETS =
+
+NEED_ZSTD = 0
+ifneq ($(NOPOD5),1)
+    NEED_ZSTD = 1
+endif
+ifneq ($(NOSLOW5),1)
+    NEED_ZSTD = 1
+endif
+ifeq ($(NEED_ZSTD),1)
+    EXT_TARGETS += zstd
+endif
+
+ifneq ($(NOHDF5),1)
+    EXT_TARGETS += hdf5
+endif
+
+ifneq ($(NOSLOW5),1)
+    EXT_TARGETS += slow5
+endif
+
+ifneq ($(NOPOD5),1)
+    EXT_TARGETS += pod5
+endif
+
+# Validation targets (run after deps are built)
+CHECK_TARGETS =
+ifneq ($(NOPOD5),1)
+    CHECK_TARGETS += check_pod5
+endif
+ifneq ($(NOHDF5),1)
+    CHECK_TARGETS += check_hdf5
+endif
+ifneq ($(NOSLOW5),1)
+    CHECK_TARGETS += check_slow5
+endif
+
+# =====================================================================
+# Top-level targets
+# =====================================================================
+.PHONY: all subset clean help zstd hdf5 slow5 pod5 \
+        check_hdf5 check_slow5 check_pod5
+
+all: $(EXT_TARGETS) $(CHECK_TARGETS) $(PROG)
+
+subset: $(CHECK_TARGETS) $(PROG)
+
+# =====================================================================
+# Link
+# =====================================================================
+$(PROG): $(OBJS)
+	$(COMPILER) $(ALL_FLAGS) $(OBJS) -o $@ $(LIBS)
+
+# =====================================================================
+# Compile: all .c files use the same compiler (CC or CXX)
+# =====================================================================
+%.o: %.c
+	$(COMPILER) -c $(LANG_MODE) $(ALL_FLAGS) $(INCLUDES) $< -o $@
+
+# =====================================================================
+# External dependency: zstd
+# =====================================================================
+zstd:
+ifeq ($(NEED_ZSTD),1)
+	@echo "=== Building zstd ==="
+	+$(MAKE) -C $(WORKDIR)/zstd lib-release
+endif
+
+# =====================================================================
+# External dependency: HDF5
+# =====================================================================
+hdf5:
+ifneq ($(NOHDF5),1)
+ifneq ($(HDF5_COMPILE),0)
+	@echo "=== Building HDF5 ==="
+	cd $(HDF5_DIR) && \
+		mkdir -p build && \
+		./configure --enable-threadsafe --disable-hl --prefix="$(HDF5_BUILD_DIR)" && \
+		$(MAKE) -j && \
+		$(MAKE) install
+endif
+endif
+
+# =====================================================================
+# External dependency: slow5lib (depends on zstd)
+# =====================================================================
+slow5: zstd
+ifneq ($(NOSLOW5),1)
+ifneq ($(SLOW5_COMPILE),0)
+	@echo "=== Building slow5lib ==="
+	+$(MAKE) -C $(SLOW5_DIR) \
+		slow5_mt=1 \
+		zstd_local=$(WORKDIR)/zstd/lib \
+		lib/libslow5.a
+endif
+endif
+
+# =====================================================================
+# External dependency: POD5 (download pre-built, depends on zstd)
+# =====================================================================
+pod5: zstd
+ifneq ($(NOPOD5),1)
+ifneq ($(POD5_DOWNLOAD),0)
+	@echo "=== Downloading POD5 v$(POD5_VERSION) ==="
+	@mkdir -p $(POD5_DIR)
+	@if [ ! -f "$(POD5_INCLUDE_DIR)/pod5_format/c_api.h" ]; then \
+		echo "Fetching $(POD5_URL)"; \
+		curl -fSL $(POD5_URL) | tar -xz -C $(POD5_DIR); \
+	else \
+		echo "POD5 already downloaded, skipping."; \
 	fi
+endif
+endif
+
+# =====================================================================
+# Validation checks
+# =====================================================================
+check_pod5:
+ifneq ($(NOPOD5),1)
+	@[ -f "$(POD5_INCLUDE_DIR)/pod5_format/c_api.h" ] || \
+		{ echo "ERROR: POD5 headers not found at $(POD5_INCLUDE_DIR)" >&2; exit 1; }
+	@[ -f "$(POD5_LIB_DIR)/libpod5_format.a" ] || \
+		{ echo "ERROR: POD5 library not found at $(POD5_LIB_DIR)" >&2; exit 1; }
+endif
 
 check_hdf5:
-	@if [ "$(NOHDF5)" != "1" ]; then \
-		[ -f "${HDF5_INCLUDE_DIR}/H5pubconf.h" ] || { echo "HDF5 headers not found" >&2; exit 1; }; \
-		[ -f "${HDF5_LIB_DIR}/lib${HDF5_LIB}.so" ] || [ -f "${HDF5_LIB_DIR}/lib${HDF5_LIB}.a" ] || { echo "HDF5 library not found" >&2; exit 1; }; \
-	fi
+ifneq ($(NOHDF5),1)
+	@[ -f "$(HDF5_INCLUDE_DIR)/H5pubconf.h" ] || \
+		{ echo "ERROR: HDF5 headers not found at $(HDF5_INCLUDE_DIR)" >&2; exit 1; }
+	@[ -f "$(HDF5_LIB_DIR)/lib$(HDF5_LIB).a" ] || \
+		[ -f "$(HDF5_LIB_DIR)/lib$(HDF5_LIB).so" ] || \
+		{ echo "ERROR: HDF5 library not found at $(HDF5_LIB_DIR)" >&2; exit 1; }
+endif
 
 check_slow5:
-	@if [ "$(NOSLOW5)" != "1" ]; then \
-		[ -f "${SLOW5_INCLUDE_DIR}/slow5/slow5.h" ] || { echo "SLOW5 headers not found" >&2; exit 1; }; \
-		[ -f "${SLOW5_LIB_DIR}/libslow5.so" ] || [ -f "${SLOW5_LIB_DIR}/libslow5.a" ] || { echo "SLOW5 library not found" >&2; exit 1; }; \
-	fi
+ifneq ($(NOSLOW5),1)
+	@[ -f "$(SLOW5_INCLUDE_DIR)/slow5/slow5.h" ] || \
+		{ echo "ERROR: SLOW5 headers not found at $(SLOW5_INCLUDE_DIR)" >&2; exit 1; }
+	@[ -f "$(SLOW5_LIB_DIR)/libslow5.a" ] || \
+		{ echo "ERROR: SLOW5 library not found at $(SLOW5_LIB_DIR)" >&2; exit 1; }
+endif
 
-check_pod5:
-	@if [ "$(NOPOD5)" != "1" ]; then \
-		[ -f "${POD5_INCLUDE_DIR}/pod5_format/c_api.h" ] || { echo "POD5 headers not found" >&2; exit 1; }; \
-		[ -f "$(POD5_LIB_DIR)/libpod5_format.a" ] || { echo "POD5 library not found" >&2; exit 1; }; \
-	fi
+# =====================================================================
+# Clean
+# =====================================================================
+clean:
+	rm -f *.o $(PROG) *~
 
-zstd:
-	@if [ "$(NOPOD5)" != "1" ]; then \
-		cd ${WORKDIR}/zstd && make -j; \
-	fi
+# =====================================================================
+# Help
+# =====================================================================
+help:
+	@echo ""
+	@echo "src/Makefile options:"
+	@echo "  DEBUG=1       Debug build (-O2 -fsanitize=address -g)"
+	@echo "  PROFILE=1     Profiling build (-g -fno-omit-frame-pointer)"
+	@echo "  NOPOD5=1      Disable POD5 support"
+	@echo "  NOHDF5=0      Enable HDF5/FAST5 support (disabled by default)"
+	@echo "  NOSLOW5=0     Enable SLOW5/BLOW5 support (disabled by default)"
+	@echo "  asan=1        Enable AddressSanitizer"
+	@echo "  tsan=1        Enable ThreadSanitizer"
+	@echo ""
+	@echo "  make subset   Skip recompiling external dependencies"
 
-hdf5:
-	@if [ "$(NOHDF5)" != "1" ] && [ "$(HDF5_COMPILE)" != "0" ]; then \
-		cd ${HDF5_DIR}; \
-		mkdir -p build; \
-		./configure --enable-threadsafe --disable-hl --prefix="${HDF5_BUILD_DIR}"; \
-		make -j; \
-		make install; \
-	fi
-
-slow5:
-	@if [ "$(NOSLOW5)" != "1" ] && [ "$(SLOW5_COMPILE)" != "0" ]; then \
-		make -C ${SLOW5_DIR} slow5_mt=1 zstd=1; \
-	fi
-
-pod5: check_zstd
-	@if [ "$(NOPOD5)" != "1" ] && [ "$(POD5_DOWNLOAD)" != "0" ]; then \
-		cd $(WORKDIR) && mkdir -p $(POD5_URLDIR); cd $(POD5_URLDIR); wget -qO- $(POD5_URL) | tar -xzv; \
-	fi
-
-# ifeq ($(NOHDF5),1)
-# FASTDEPCOM=${CC}
-# FASTDEPCOM_FLAGS=$(CFLAGS)
-# else
-FASTDEPCOM=${CXX}
-FASTDEPCOM_FLAGS=$(CPPFLAGS)
-# endif
-
-# $(PROG): $(OBJS)
-# 	${FASTDEPCOM} $(FASTDEPCOM_FLAGS) $(OBJS) -o $(PROG) $(LIBS)
-
-$(PROG): $(OBJS)
-	${CXX} $(CPPFLAGS) $(OBJS) -o $(PROG) $(LIBS) -lstdc++
-
-# rsig.o: rsig.c
-# 	$(FASTDEPCOM) -c $(FASTDEPCOM_FLAGS) $(INCLUDES) $< -o $@
-
-# rindex.o: rindex.c
-# 	$(FASTDEPCOM) -c $(FASTDEPCOM_FLAGS) $(INCLUDES) $< -o $@
-
-# main.o: main.cpp
-# 	$(FASTDEPCOM) -c $(FASTDEPCOM_FLAGS) $(INCLUDES) $< -o $@
-
-# rmap.o: rmap.c
-# 	$(FASTDEPCOM) -c $(FASTDEPCOM_FLAGS) $(INCLUDES) $< -o $@
-
-# lchain.o: lchain.c
-# 	$(FASTDEPCOM) -c $(FASTDEPCOM_FLAGS) $(INCLUDES) $< -o $@
-
-# rseed.o: rseed.c
-# 	$(FASTDEPCOM) -c $(FASTDEPCOM_FLAGS) $(INCLUDES) $< -o $@
-
-# hit.o: hit.c
-# 	$(FASTDEPCOM) -c $(FASTDEPCOM_FLAGS) $(INCLUDES) $< -o $@
-
-.SUFFIXES:
-.SUFFIXES:.cpp .o
-
-%.o: %.cpp
-	${CXX} -c $(CPPFLAGS) $(INCLUDES) $< -o $@
-
-.SUFFIXES:
-.SUFFIXES:.c .o
-
-# %.o: %.c
-# 	${CC} -c $(CFLAGS) $(INCLUDES) $< -o $@
-
-%.o: %.c
-	$(FASTDEPCOM) -c $(FASTDEPCOM_FLAGS) $(INCLUDES) $< -o $@
-
-clean: ## Remove all generated files
-	rm -fr *.o $(PROG) *~
-
+# =====================================================================
+# Header dependency rules
+# =====================================================================
 rsketch.o: rutils.h rh_kvec.h
 lchain.o: kalloc.h rutils.h rseed.h rsketch.h chain.h krmq.h
-hit.o: chain.h kalloc.h khash.h
-rsig.o: hdf5_tools.hpp rh_kvec.h
+hit.o: chain.h kalloc.h khash.h rmap.h
+rsig.o: rsig.h rh_kvec.h
 rseed.o: rsketch.h kalloc.h rutils.h rindex.h
-hit.o: rmap.h kalloc.h khash.h
-rmap.o: rindex.h rsig.h kthread.h rh_kvec.h rutils.h rsketch.h revent.h sequence_until.h dtw.h
+rmap.o: rmap.h rindex.h rsig.h kthread.h rh_kvec.h rutils.h rsketch.h revent.h sequence_until.h dtw.h chain.h khash.h
 revent.o: roptions.h kalloc.h
-rindex.o: roptions.h rutils.h rsketch.h rsig.h bseq.h khash.h rh_kvec.h kthread.h
-main:o rawhash.h ketopt.h rutils.h
+rindex.o: rindex.h roptions.h rutils.h rsketch.h rsig.h bseq.h khash.h rh_kvec.h kthread.h revent.h
+main.o: rawhash.h ketopt.h rutils.h
+dtw.o: dtw.h rutils.h

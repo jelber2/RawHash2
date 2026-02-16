@@ -9,9 +9,34 @@
 #include "sequence_until.h"
 #include "dtw.h"
 #include "chain.h"
+#include "khash.h"
 
 #include <math.h>
 #include <float.h>  // for FLT_MAX
+#include <stdbool.h>
+#include <stdio.h>   // for snprintf
+
+#define RMAP_MAX(a, b) ((a) > (b) ? (a) : (b))
+
+/**
+ * Convert a dtw_result alignment path to a string of (i,j,diff) tuples.
+ * Returns a malloc'd string that the caller must free.
+ */
+static char *dtwresult_to_string(const dtw_result *res)
+{
+	/* estimate: each element is at most ~30 chars "(12345,12345,1.234567)" */
+	size_t cap = res->alignment_length * 32 + 1;
+	char *buf = (char *)malloc(cap);
+	size_t pos = 0;
+	for (size_t i = 0; i < res->alignment_length; i++) {
+		int n = snprintf(buf + pos, cap - pos, "(%zu,%zu,%f)",
+		                 res->alignment[i].position.i,
+		                 res->alignment[i].position.j,
+		                 res->alignment[i].difference);
+		pos += n;
+	}
+	return buf;
+}
 
 #ifdef PROFILERH
 double ri_filereadtime = 0.0;
@@ -125,13 +150,40 @@ static mm128_t *collect_seed_hits(void *km,
 	return seed_hits;
 }
 
-void align_chain(mm_reg1_t *chain, mm128_t* anchors, const ri_idx_t *ri, const float* read_events, const uint32_t n_read_events, const ri_mapopt_t *opt, bool cigar=false, float min_score=-1e10){
+void align_chain(mm_reg1_t *chain, mm128_t* anchors, const ri_idx_t *ri, const float* read_events, const uint32_t n_read_events, const ri_mapopt_t *opt, bool cigar, float min_score, dtw_result *out_result){
 	int rid = chain->rid;
 	int rs;
 	if(ri->flag&RI_I_SIG_TARGET) rs = chain->rev?(uint32_t)(ri->sig[rid].l_sig+1-chain->re):chain->rs;
 	else rs = chain->rev?(uint32_t)(ri->seq[rid].len+1-chain->re):chain->rs;
 	float* ref = (chain->rev)?ri->R[rid]:ri->F[rid];
 	// uint32_t r_len = (chain->rev)?ri->r_l_sig[rid]:ri->f_l_sig[rid];
+
+	if(out_result) {
+		out_result->alignment = NULL;
+		out_result->alignment_length = 0;
+		out_result->cost = 0.0f;
+	}
+
+	/* When cigar traceback is requested, always use global full DTW on the
+	   chain's coordinate range regardless of the configured mode.  The
+	   scoring was already done in the first pass; this second call only
+	   needs the alignment path. */
+	if(cigar && out_result){
+		float* revents = ref + chain->rs;
+		const uint32_t rlen = chain->re - chain->rs + 1;
+		const float* qevents = read_events + chain->qs;
+		const uint32_t qlen = chain->qe - chain->qs + 1;
+
+		dtw_result res = DTW_global_tb(qevents, qlen, revents, rlen, false);
+		chain->alignment_score = qlen*opt->dtw_match_bonus - res.cost;
+		/* Offset positions to absolute coordinates */
+		for(size_t k = 0; k < res.alignment_length; k++){
+			res.alignment[k].position.i += chain->qs;
+			res.alignment[k].position.j += chain->rs;
+		}
+		*out_result = res;
+		return;
+	}
 
 	float dtw_cost = 0.0f;
 	uint32_t num_aligned_read_events = 0;
@@ -148,17 +200,16 @@ void align_chain(mm_reg1_t *chain, mm128_t* anchors, const ri_idx_t *ri, const f
 			return;
 		}
 		if(opt->dtw_fill_method == RI_M_DTW_FILL_METHOD_FULL){
-			dtw_cost = DTW_global(qevents, qlen, revents, rlen);
+			dtw_cost = DTW_global(qevents, qlen, revents, rlen, false);
 		}
 		else{
-			int band_radius = std::max(1, (int)(qlen*opt->dtw_band_radius_frac));
-			dtw_cost = DTW_global_slantedbanded_antidiagonalwise(qevents, qlen, revents, rlen, band_radius);
+			int band_radius = RMAP_MAX(1, (int)(qlen*opt->dtw_band_radius_frac));
+			dtw_cost = DTW_global_slantedbanded_antidiagonalwise(qevents, qlen, revents, rlen, band_radius, false);
 		}
 		num_aligned_read_events = qlen;
 	}
 	else if(opt->dtw_border_constraint == RI_M_DTW_BORDER_CONSTRAINT_SPARSE){
 		uint32_t alignment_parts = chain->cnt-1;
-		std::vector<alignment_element> alignment;
 
 		//these are only needed for the early termination condition
 		const uint32_t qFulllen = chain->qe - chain->qs + 1;
@@ -166,8 +217,8 @@ void align_chain(mm_reg1_t *chain, mm128_t* anchors, const ri_idx_t *ri, const f
 
 		for(size_t alignment_part=0; alignment_part<alignment_parts; alignment_part++){
 			//TODO: some of these could be merged when they are very short, for performance
-			const mm128_t &start_anchor = anchors[alignment_part];
-			const mm128_t &end_anchor = anchors[alignment_part+1];
+			const mm128_t start_anchor = anchors[alignment_part];
+			const mm128_t end_anchor = anchors[alignment_part+1];
 
 			float* revents = ref + (uint32_t)start_anchor.x;
 			const uint32_t rlen =  (uint32_t)end_anchor.x - (uint32_t)start_anchor.x + 1;
@@ -185,7 +236,7 @@ void align_chain(mm_reg1_t *chain, mm128_t* anchors, const ri_idx_t *ri, const f
 				sub_dtw_cost = DTW_global(qevents, qlen, revents, rlen, exclude_last_element);
 			}
 			else{
-				int band_radius = std::max(1, (int)(qlen*opt->dtw_band_radius_frac));
+				int band_radius = RMAP_MAX(1, (int)(qlen*opt->dtw_band_radius_frac));
 				sub_dtw_cost = DTW_global_slantedbanded_antidiagonalwise(qevents, qlen, revents, rlen, band_radius, exclude_last_element);
 			}
 			dtw_cost += sub_dtw_cost;
@@ -217,7 +268,7 @@ void ri_map_frag(const ri_idx_t *ri,
 				double* mean_sum,
 				double* std_dev_sum,
 				uint32_t* n_events_sum,
-				const uint32_t c_count = 0)
+				const uint32_t c_count)
 {	
 	uint32_t n_events = 0;
 
@@ -324,9 +375,9 @@ void ri_map_frag(const ri_idx_t *ri,
 								chn_pen_skip, &n_seed_pos, seed_hits, &(reg->prev_anchors), &(reg->n_cregs), &u, b->km, &profile_chain_sort);
 		ri_chainsorttime += profile_chain_sort;
 		#else
-		seed_hits = mg_lchain_dp(opt->max_target_gap_length, opt->max_query_gap_length, opt->bw, opt->max_num_skips, 
+		seed_hits = mg_lchain_dp(opt->max_target_gap_length, opt->max_query_gap_length, opt->bw, opt->max_num_skips,
 								opt->max_chain_iter, opt->min_num_anchors, opt->min_chaining_score, chn_pen_gap,
-								chn_pen_skip, &n_seed_pos, seed_hits, &(reg->prev_anchors), &(reg->n_cregs), &u, b->km);
+								chn_pen_skip, &n_seed_pos, seed_hits, &(reg->prev_anchors), &(reg->n_cregs), &u, b->km, NULL);
 		#endif
 	}else
 		seed_hits = mg_lchain_rmq(max_gap, opt->rmq_inner_dist, opt->bw, opt->max_num_skips, opt->rmq_size_cap,
@@ -361,7 +412,7 @@ void ri_map_frag(const ri_idx_t *ri,
 		
 		for(i = 0; i < reg->n_cregs; ++i){
 			k = reg->creg[i].as;
-			align_chain(&reg->creg[i], seed_hits + k, ri, reg->events, reg->offset+n_events, opt, false, best_found_alignment);
+			align_chain(&reg->creg[i], seed_hits + k, ri, reg->events, reg->offset+n_events, opt, false, best_found_alignment, NULL);
 
 			if(reg->creg[i].alignment_score >= opt->dtw_min_score){
 				if(reg->creg[i].alignment_score > best_found_alignment){
@@ -418,7 +469,7 @@ static void map_worker_for(void *_data,
 
 		if(reg0->creg){free(reg0->creg); reg0->creg = NULL; reg0->n_cregs = 0;}
 
-		ri_map_frag(s->p->ri, (const uint32_t)s_qe-s_qs, (const float*)&(sig->sig[s_qs]), reg0, b, opt, sig->name, &mean_sum, &std_dev_sum, &n_events_sum);
+		ri_map_frag(s->p->ri, (const uint32_t)s_qe-s_qs, (const float*)&(sig->sig[s_qs]), reg0, b, opt, sig->name, &mean_sum, &std_dev_sum, &n_events_sum, 0);
 
 		int n_chains = (opt->flag&RI_M_ALL_CHAINS || reg0->n_cregs < 1)?reg0->n_cregs:1;
 
@@ -518,6 +569,19 @@ static void map_worker_for(void *_data,
 		reg0->maps[reg0->n_maps-1].c_id = 0;
 	}
 
+	/* Re-align mapped chains with traceback when CIGAR output is requested */
+	dtw_result *cigar_results = NULL;
+	if ((opt->flag & RI_M_DTW_OUTPUT_CIGAR) && (opt->flag & RI_M_DTW_EVALUATE_CHAINS)
+	    && reg0->n_maps > 0 && chains && reg0->events) {
+		cigar_results = (dtw_result *)calloc(reg0->n_maps, sizeof(dtw_result));
+		for (uint32_t m = 0; m < reg0->n_maps; m++) {
+			uint32_t c_id = reg0->maps[m].c_id;
+			align_chain(&chains[c_id], NULL, s->p->ri,
+			            reg0->events, reg0->offset, opt,
+			            true, -1e10f, &cigar_results[m]);
+		}
+	}
+
 	if (reg0->n_maps == 0){
 		reg0->maps = (ri_map_t*)ri_kcalloc(0, 1, sizeof(ri_map_t));
 		char *tags = (char *)malloc(1024 * sizeof(char));
@@ -569,6 +633,18 @@ static void map_worker_for(void *_data,
 			// sprintf(buffer, "\ts2:i:%d", reg0->n_cregs > 1 ? chains[1].score : 0); strcat(tags, buffer);
 			sprintf(buffer, "\tsm:f:%.2f", mean_chain_score); strcat(tags, buffer);
 
+			/* Append DTW alignment tags when CIGAR output is enabled */
+			if (cigar_results && cigar_results[m].alignment) {
+				sprintf(buffer, "\talns:f:%.6f", chains[c_id].alignment_score); strcat(tags, buffer);
+				char *aln_str = dtwresult_to_string(&cigar_results[m]);
+				size_t cur_len = strlen(tags);
+				size_t aln_len = strlen(aln_str);
+				tags = (char *)realloc(tags, cur_len + aln_len + 16);
+				strcat(tags, "\taln:s:");
+				strcat(tags, aln_str);
+				free(aln_str);
+			}
+
 			reg0->read_id = sig->rid;
 			reg0->read_name = sig->name;
 			reg0->maps[m].read_length = (s->p->ri->flag&RI_I_SIG_TARGET)?(reg0->offset):(uint32_t)(read_position_scale*chains[c_id].qe);
@@ -583,6 +659,14 @@ static void map_worker_for(void *_data,
 			reg0->maps[m].mapped = 1; 
 			reg0->maps[m].tags = tags;
 		}
+	}
+
+	/* Free cigar alignment results */
+	if (cigar_results) {
+		for (uint32_t m = 0; m < reg0->n_maps; m++) {
+			free(cigar_results[m].alignment);
+		}
+		free(cigar_results);
 	}
 
 	if(reg0->prev_anchors) {ri_kfree(b->km, reg0->prev_anchors); reg0->prev_anchors = NULL; reg0->n_prev_anchors = 0;}
