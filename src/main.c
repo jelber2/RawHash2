@@ -80,7 +80,7 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"no-event-detection",	ko_no_argument,  		368 },
 	{ (char*)"io-thread",			ko_required_argument, 	369 },
 	{ (char*)"min-score2",			ko_required_argument, 	370 },
-	{ (char*)"version",				ko_no_argument, 	  	370 },
+	{ (char*)"version",				ko_no_argument, 	  	371 },
 	{ 0, 0, 0 }
 };
 

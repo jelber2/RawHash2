@@ -114,5 +114,18 @@ target_link_libraries(rawhash2 PRIVATE
     m                   # math library
 )
 
+# --- C++ runtime libraries (Linux only) ---
+# POD5 v0.3.36 static archives (libarrow.a, libpod5_format.a) reference C++
+# stdlib symbols that must be resolved after those archives:
+#   - std::filesystem (from file_writer.cpp) needs -lstdc++fs on GCC < 9
+#     (harmless stub on GCC 9+)
+#   - std::basic_stringstream and other C++ symbols need -lstdc++ explicitly
+#     at the end to ensure correct link ordering with static archives
+if(ENABLE_POD5 OR ENABLE_HDF5)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(rawhash2 PRIVATE stdc++fs stdc++)
+    endif()
+endif()
+
 # --- Install ---
 install(TARGETS rawhash2 RUNTIME DESTINATION bin)

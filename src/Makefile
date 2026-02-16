@@ -239,6 +239,19 @@ ifeq ($(SYSTEM_NAME),Linux)
 endif
 
 # =====================================================================
+# C++ runtime libraries (must come LAST for correct link ordering)
+# POD5 v0.3.36 static archives (libarrow.a, libpod5_format.a) reference
+# C++ stdlib symbols that must be resolved after those archives.
+# =====================================================================
+ifeq ($(NEED_CXX),1)
+    ifeq ($(SYSTEM_NAME),Linux)
+        # POD5 v0.3.36 uses std::filesystem; -lstdc++fs provides these
+        # symbols on GCC < 9 and is a harmless stub on GCC 9+.
+        LIBS += -lstdc++fs -lstdc++
+    endif
+endif
+
+# =====================================================================
 # Source files and objects
 # =====================================================================
 SRCS = kthread.c kalloc.c bseq.c roptions.c sequence_until.c rutils.c \
