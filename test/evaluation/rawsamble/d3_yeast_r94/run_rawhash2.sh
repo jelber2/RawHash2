@@ -30,7 +30,7 @@ echo "GFA Stats from minimap2 mappings:" >> "${OUTDIR}/${DATASET}_rawsamble_${PR
 bash ../../../scripts/analyze_gfa.sh  "${OUTDIR}/mm2_overlaps.gfa" >> "${OUTDIR}/${DATASET}_rawsamble_${PRESET}.results"
 python ../../../scripts/compute_aun.py "${OUTDIR}/mm2_overlaps.gfa"
 
-python3 ../../../scripts/pafstats.py "${OUTDIR}/${DATASET}_rawsamble_${PRESET}.paf" "${OUTDIR}/mm2_overlaps.paf" 2>> "${OUTDIR}/${DATASET}_rawsamble_${PRESET}.results"
+python3 ../../../scripts/pafstats_overlap.py "${OUTDIR}/${DATASET}_rawsamble_${PRESET}.paf" "${OUTDIR}/mm2_overlaps.paf" 2>> "${OUTDIR}/${DATASET}_rawsamble_${PRESET}.results"
 
 bash ../../../scripts/run_minimap2_multimap.sh "${OUTDIR}" ${READS} ${REF} ${THREAD}
 echo "Rawsamble chained read percentage:" >> "${OUTDIR}/${DATASET}_rawsamble_${PRESET}.results"

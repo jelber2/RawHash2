@@ -10,6 +10,7 @@
 #include "dtw.h"
 #include "chain.h"
 #include "khash.h"
+#include "rextdata.h"
 
 #include <math.h>
 #include <float.h>  // for FLT_MAX
@@ -275,7 +276,27 @@ void ri_map_frag(const ri_idx_t *ri,
 	#ifdef PROFILERH
 	double signal_t = ri_realtime();
 	#endif
-	float* events = detect_events(b->km, s_len, sig, opt->window_length1, opt->window_length2, opt->threshold1, opt->threshold2, opt->peak_height, mean_sum, std_dev_sum, n_events_sum, &n_events);
+
+	float* events = NULL;
+	const ri_ext_events_entry_t *ext_ev = ri_lookup_ext_events(opt->ext_events, qname);
+	const ri_ext_peaks_entry_t *ext_pk = ri_lookup_ext_peaks(opt->ext_peaks, qname);
+
+	if (ext_ev) {
+		/* External events: copy into km-allocated buffer, skip detect_events entirely */
+		n_events = ext_ev->n_events;
+		events = (float*)ri_kmalloc(b->km, n_events * sizeof(float));
+		memcpy(events, ext_ev->events, n_events * sizeof(float));
+	} else if (ext_pk) {
+		/* External peaks: normalize signal, remap indices, run gen_events */
+		events = detect_events_with_ext_peaks(b->km, s_len, sig,
+			ext_pk->peaks, ext_pk->n_peaks,
+			opt->min_segment_length, opt->max_segment_length,
+			mean_sum, std_dev_sum, n_events_sum, &n_events);
+	} else {
+		/* Default: full t-test event detection */
+		events = detect_events(b->km, s_len, sig, opt->window_length1, opt->window_length2, opt->threshold1, opt->threshold2, opt->peak_height, opt->min_segment_length, opt->max_segment_length, mean_sum, std_dev_sum, n_events_sum, &n_events);
+	}
+
 	#ifdef PROFILERH
 	ri_signaltime += ri_realtime() - signal_t;
 	#endif
@@ -451,8 +472,17 @@ static void map_worker_for(void *_data,
 	ri_sig_t* sig = s->sig[i];
 
 	uint32_t qlen = sig->l_sig;
-	uint32_t l_chunk = (opt->chunk_size > qlen || (opt->flag&RI_M_NO_ADAPTIVE))?qlen:opt->chunk_size;
-	uint32_t max_chunk = (opt->flag&RI_M_NO_ADAPTIVE)?1:opt->max_num_chunk;
+
+	/* When external peaks or events are provided for this read, force
+	 * processing the entire signal in a single chunk so that external
+	 * indices/values correspond to the full read. */
+	int has_ext_data = (opt->ext_events && ri_lookup_ext_events(opt->ext_events, sig->name)) ||
+					   (opt->ext_peaks && ri_lookup_ext_peaks(opt->ext_peaks, sig->name));
+
+	uint32_t l_chunk = has_ext_data ? qlen :
+		((opt->chunk_size > qlen || (opt->flag&RI_M_NO_ADAPTIVE)) ? qlen : opt->chunk_size);
+	uint32_t max_chunk = has_ext_data ? 1 :
+		((opt->flag&RI_M_NO_ADAPTIVE) ? 1 : opt->max_num_chunk);
 	uint32_t s_qs, s_qe = l_chunk;
 
 	uint32_t c_count = 0;
@@ -724,11 +754,11 @@ ri_sig_t** ri_sig_read_frag(pipeline_mt *pl,
 		
 		ri_sig_t *s = (ri_sig_t*)calloc(1, sizeof(ri_sig_t));
 		rh_kv_push(ri_sig_t*, 0, rsigv, s);
-		ri_read_sig(pl->fp, s, 1);
+		ri_read_sig(pl->fp, s, 1, (pl->opt->ext_peaks || pl->opt->ext_events) ? 1 : 0);
 		size += s->l_sig;
 
 		if(size >= chunk_size) break;
-		
+
 		//Debugging for sweeping purposes
 		// pl->su_nreads++;
 		// if(pl->su_nreads >= 1000) break;

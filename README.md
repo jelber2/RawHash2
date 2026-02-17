@@ -12,7 +12,7 @@ RawHash2 is a hash-based mechanism to map raw nanopore signals to a reference ge
 
 Rawsamble is a mechanism that finds overlaps betweel raw signals without a reference genome (all-vs-all overlapping). The overlap information is generated in a PAF output and can be used by assemblers such as `miniasm` to construct *de novo* assemblies.
 
-Below figure shows the overview of the steps that RawHash takes to find matching regions between a reference genome and a raw nanopore signal.
+Below figure shows the overview of the steps that RawHash2 takes to find matching regions between a reference genome and a raw nanopore signal.
 
 <p align="center" width="100%">
     <img width="50%" src="./gitfigures/overview.png">
@@ -20,7 +20,7 @@ Below figure shows the overview of the steps that RawHash takes to find matching
 
 To efficiently identify similarities between a reference genome and reads, RawHash has two steps, similar to regular read mapping tools, 1) indexing and 2) mapping. The indexing step generates hash values from the expected signal representation of a reference genome and stores them in a hash table. In the mapping step, RawHash generates the hash values from raw signals and queries the hash table generated in the indexing step to find seed matches. To map the raw signal to a reference genome, RawHash performs chaining over the seed matches.
 
-RawHash can be used to map reads from **FAST5, POD5, SLOW5, or BLOW5** files to a reference genome in sequence format.
+RawHash2 can be used to map reads from **FAST5, POD5, SLOW5, or BLOW5** files to a reference genome in sequence format. **POD5 is the recommended format** as it is the current default for Oxford Nanopore sequencers.
 
 RawHash performs real-time mapping of nanopore raw signals. When the prefix of reads can be mapped to a reference genome, RawHash will stop mapping and provide the mapping information in PAF format. We follow the similar PAF template used in [UNCALLED](https://github.com/skovaka/UNCALLED) and [Sigmap](https://github.com/haowenz/sigmap) to report the mapping information.
 
@@ -40,6 +40,16 @@ RawHash performs real-time mapping of nanopore raw signals. When the prefix of r
 
 # Installation
 
+## Prerequisites
+
+| Requirement | Linux | macOS |
+|---|---|---|
+| C++ compiler | GCC 11+ (`g++` 11 or later) | Xcode Command Line Tools (Apple Clang) |
+| CMake | 3.16+ (for CMake build only) | 3.16+ (for CMake build only) |
+| GNU Make | Required | Required |
+
+> **Note:** When POD5 support is enabled (the default), all source files are compiled as C++ and linked against POD5 v0.3.36's pre-built static libraries. These libraries require GCC 11 or later on Linux. GCC 8.x is known to fail at link time. If you cannot upgrade GCC, you can disable POD5 with `make NOPOD5=1` to compile with any C99-compatible compiler, but POD5 signal input will not be available.
+
 ## Quick Start
 
 * Clone the code from its GitHub repository (`--recursive` must be used):
@@ -49,13 +59,13 @@ git clone --recursive https://github.com/STORMgroup/RawHash2.git rawhash2
 cd rawhash2
 ```
 
-* **Recommended: Build with CMake** (requires CMake 3.16+, a C++11 compiler, and GNU Make):
+* **Recommended: Build with CMake** (see [Prerequisites](#prerequisites) above):
 
 ```bash
 make cmake
 ```
 
-* **Alternative: Build with Make only** (no CMake required):
+* **Alternative: Build with Make only** (no CMake required, see [Prerequisites](#prerequisites)):
 
 ```bash
 make
@@ -195,8 +205,16 @@ Indexing is similar to minimap2's usage. We additionally include the pore models
 
 Below is an example that generates an index file `ref.ind` for the reference genome `ref.fasta` using a certain k-mer model located under `extern` and `32` threads.
 
+* R9.4 indexing:
+
 ```bash
 rawhash2 -d ref.ind -p extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model -t 32 ref.fasta
+```
+
+* R10.4.1 indexing (uses a different pore model and the `--r10` flag):
+
+```bash
+rawhash2 -d ref.ind -p extern/local_kmer_models/uncalled_r1041_model_only_means.txt --r10 -t 32 ref.fasta
 ```
 
 Note that you can directly jump to mapping without creating the index because RawHash2 is able to generate the index relatively quickly on-the-fly within the mapping step. However, a real-time genome analysis application may still prefer generating the indexing before the mapping step. Thus, we suggest creating the index before the mapping step.
@@ -255,9 +273,116 @@ rawhash2 -t 32 -x faster ref.ind test/data/d5_human_na12878_r94/fast5_files > ma
 
 The output will be saved to `mapping.paf` in a modified PAF format used by [Uncalled](https://github.com/skovaka/UNCALLED).
 
+# Functionalities
+
+RawHash2 provides several key functionalities beyond basic read mapping. This section describes each feature and how to enable it.
+
+## R10.4.1 Support
+
+RawHash2 supports R10.4.1 (and R10 in general) nanopore data. R10 uses 9-mer pore models (vs 6-mer for R9.4) and different device parameters (e.g., different sampling rate). Use the `--r10` flag along with the appropriate pore model.
+
+**Indexing for R10.4.1:**
+
+```bash
+rawhash2 -d ref_r10.ind \
+  -p extern/local_kmer_models/uncalled_r1041_model_only_means.txt \
+  --r10 -t 32 ref.fasta
+```
+
+**Mapping for R10.4.1:**
+
+```bash
+rawhash2 -t 32 -x sensitive --r10 ref_r10.ind pod5_files/ > mapping.paf
+```
+
+## Signal Alignment (RawAlign)
+
+RawHash2 integrates DTW-based signal alignment as proposed in [RawAlign](https://doi.org/10.1109/ACCESS.2024.3520669). This refines mapping accuracy by aligning the raw signal against the reference signal using Dynamic Time Warping.
+
+To use signal alignment, the index must be built with `--store-sig` to store reference signal values:
+
+```bash
+# Build index with reference signal stored
+rawhash2 -d ref.ind -p pore_model.txt --store-sig -t 32 ref.fasta
+
+# Map with DTW-based chain evaluation and CIGAR output
+rawhash2 -t 32 --dtw-evaluate-chains --dtw-output-cigar ref.ind pod5_files/ > mapping.paf
+```
+
+DTW options control the alignment behavior:
+- `--dtw-border-constraint`: alignment scope (`global`, `sparse`, or `local`; default: `sparse`)
+- `--dtw-fill-method`: matrix computation (`full` or `banded[=FRAC]`; default: `banded`)
+- `--dtw-match-bonus`: match score bonus (default: 0.4)
+- `--dtw-min-score`: minimum DTW score to report a mapping (default: 20.0)
+
+## External Segmentation
+
+By default, RawHash2 uses a built-in t-test peak detector to segment raw signal into events. You can instead provide pre-computed segmentation data using one of three mutually exclusive options:
+
+### Peak Positions (`--peaks-file`)
+
+Provide pre-computed peak positions (segment boundaries) in the raw signal.
+
+File format (tab-separated):
+```
+read_id    peak1 peak2 peak3 ... peakN
+```
+
+### Event Values (`--events-file`)
+
+Provide pre-computed event-level values (e.g., from an external segmentation tool).
+
+File format (tab-separated):
+```
+read_id    ev1 ev2 ev3 ... evN
+```
+
+### Move Tables from Dorado (`--moves-file`)
+
+Use move table data from [dorado](https://github.com/nanoporetech/dorado) basecaller output. The move table encodes which signal samples correspond to base transitions, enabling RawHash2 to use dorado's neural-network-based segmentation.
+
+File format (tab-separated, one line per read):
+```
+read_id    mv:B:c,STRIDE,0,1,...    ts:i:OFFSET
+```
+
+**Extract move tables from a dorado BAM:**
+
+```bash
+# Use the provided helper script (requires samtools)
+test/scripts/extract_moves_from_bam.sh reads_dorado.bam > moves.tsv
+
+# Then map with dorado's segmentation
+rawhash2 --moves-file moves.tsv -p pore_model.txt -d ref.ind ref.fasta pod5_files/
+```
+
+The `--min-seg-length` and `--max-seg-length` parameters control the minimum and maximum allowed segment lengths (in samples), regardless of which segmentation method is used. You may also consider setting `--sig-diff 0`, which is a heuristic that performs homopolymer compression to mitigate the oversegmentation issue in t-test. Similar strategy is used in Sigmap and Sigmoni tools as well.
+
+## Sequence Until (Real-Time Abundance Estimation)
+
+Sequence Until provides real-time abundance estimation during sequencing. It periodically estimates the composition of the sequenced sample and can be used to determine when sufficient data has been collected.
+
+```bash
+rawhash2 -t 32 --sequence-until ref.ind pod5_files/ > mapping.paf
+```
+
+Key parameters:
+- `--threshold`: outlier distance threshold (default: 1.5)
+- `--n-samples`: number of previous estimations to compare (default: 5)
+- `--test-frequency`: re-estimate every N reads (default: 500)
+- `--min-reads`: minimum reads before first estimate (default: 500)
+
+## Contamination Analysis
+
+The `--depletion` flag provides a high-precision mode suitable for contamination detection and abundance analysis. It adjusts internal parameters to prioritize precision over recall.
+
+```bash
+rawhash2 -t 32 -x sensitive --depletion ref.ind pod5_files/ > mapping.paf
+```
+
 ## Rawsamble (for overlapping and assembly construction)
 
-Our new overlapping mechanism, Rawsamble, is now integrated in RawHash. To create overlaps, you can construct the index from signals and perform overlapping using this index as follows:
+Our new overlapping mechanism, Rawsamble, is now integrated in RawHash2. To create overlaps, you can construct the index from signals and perform overlapping using this index as follows:
 
 ```
 rawhash2 -x ava -p ../../rawhash2/extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model -d ava.ind -t32 test/data/d3_yeast_r94/fast5_files/

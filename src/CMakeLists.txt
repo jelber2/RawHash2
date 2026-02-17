@@ -17,6 +17,7 @@ set(RAWHASH2_SOURCES
     rseed.c
     hit.c
     dtw.c
+    rextdata.c
     rmap.c
     main.c
 )

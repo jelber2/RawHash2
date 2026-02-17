@@ -130,6 +130,10 @@ void ri_mapopt_init(ri_mapopt_t *opt)
 	// opt->threshold2 = 9.0f,
 	// opt->peak_height = 1.0f;
 
+	//Segment length filtering for gen_events
+	opt->min_segment_length = 0;   // no minimum by default (backward compatible)
+	opt->max_segment_length = 500; // existing behavior
+
 	//Sequence until parameters
 	opt->t_threshold = 1.5f; //--threshold
 	opt->tn_samples = 5; //--n-samples

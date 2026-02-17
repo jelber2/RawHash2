@@ -14,7 +14,6 @@ test/data/download_d8_*
 # test/data/download_d9_*
 test/data/download_d10_*
 test/evaluation/read_mapping/d8_*
-test/evaluation/read_mapping/d9_*
 test/evaluation/read_mapping/d10_*
 test/data/*/*.fa
 test/data/*/*.fasta
@@ -64,8 +63,6 @@ test/data/relative_abundance/test*
 test/evaluation/*/*/comparison/*/
 
 test/data/relative_abundance/read_ids.txt
-
-test/scripts/*test*
 test/evaluation/read_mapping/*/parameters.txt
 test/evaluation/read_mapping/*/results.txt
 test/evaluation/read_mapping/*parameters*.txt

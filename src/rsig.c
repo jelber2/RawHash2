@@ -331,7 +331,7 @@ void find_sfiles(const char *A, ri_char_v *fnames)
 }
 
 #ifndef NHDF5RH
-static inline void ri_read_sig_fast5(ri_sig_file_t* fp, ri_sig_t* s){
+static inline void ri_read_sig_fast5(ri_sig_file_t* fp, ri_sig_t* s, int no_sig_filter){
 
 	if(fp->cur_read >= fp->num_read) return;
 	
@@ -368,7 +368,7 @@ static inline void ri_read_sig_fast5(ri_sig_file_t* fp, ri_sig_t* s){
 	float pa = 0;
 	for (size_t i = 0; i < sig.size(); i++) {
 		pa = (sig[i]+offset)*scale;
-		if (pa > 30.0f && pa < 200.0f) {
+		if (no_sig_filter || (pa > 30.0f && pa < 200.0f)) {
 			sig[l_sig++] = pa;
 		}
 	}
@@ -381,7 +381,7 @@ static inline void ri_read_sig_fast5(ri_sig_file_t* fp, ri_sig_t* s){
 #endif
 
 #ifndef NPOD5RH
-static inline void ri_read_sig_pod5(ri_sig_file_t* fp, ri_sig_t* s){
+static inline void ri_read_sig_pod5(ri_sig_file_t* fp, ri_sig_t* s, int no_sig_filter){
 
 	if(fp->cur_read >= fp->num_read) return;
 	if(fp->pod5_row >= fp->pod5_row_count) return;
@@ -428,7 +428,7 @@ static inline void ri_read_sig_pod5(ri_sig_file_t* fp, ri_sig_t* s){
 	float pa = 0.0f;
 	for(uint64_t i = 0; i < read_data.num_samples; i++){
 		pa = (sig[i]+read_data.calibration_offset)*read_data.calibration_scale;
-		if (pa > 30 && pa < 200) {
+		if (no_sig_filter || (pa > 30 && pa < 200)) {
 			sigF[l_sig++] = pa;
 		}
 	}
@@ -475,7 +475,7 @@ static inline void ri_read_sig_pod5(ri_sig_file_t* fp, ri_sig_t* s){
 #endif
 
 #ifndef NSLOW5RH
-static inline void ri_read_sig_slow5(ri_sig_file_t* fp, ri_sig_t* s){
+static inline void ri_read_sig_slow5(ri_sig_file_t* fp, ri_sig_t* s, int no_sig_filter){
 	
 	if(fp->cur_read >= fp->num_read) return;
 
@@ -497,7 +497,7 @@ static inline void ri_read_sig_slow5(ri_sig_file_t* fp, ri_sig_t* s){
 	
 	for(int i = 0; i < rec->len_raw_signal; ++i){
 		pa = (rec->raw_signal[i]+rec->offset)*scale;
-		if (pa > 30.0f && pa < 200.0f) {
+		if (no_sig_filter || (pa > 30.0f && pa < 200.0f)) {
 			sigF[l_sig++] = pa;
 		}
 	}
@@ -532,17 +532,17 @@ static inline void ri_read_sig_slow5(ri_sig_file_t* fp, ri_sig_t* s){
 }
 #endif
 
-void ri_read_sig(ri_sig_file_t* fp, ri_sig_t* s, int io_n_threads){
+void ri_read_sig(ri_sig_file_t* fp, ri_sig_t* s, int io_n_threads, int no_sig_filter){
 
 	assert(fp->cur_read < fp->num_read);
 
 	#ifndef NHDF5RH
-	if(fp->fp) ri_read_sig_fast5(fp, s);
+	if(fp->fp) ri_read_sig_fast5(fp, s, no_sig_filter);
 	#endif
 	#ifndef NPOD5RH
-	if(fp->pp) ri_read_sig_pod5(fp, s);
+	if(fp->pp) ri_read_sig_pod5(fp, s, no_sig_filter);
 	#endif
 	#ifndef NSLOW5RH
-	if(fp->sp) ri_read_sig_slow5(fp, s);
+	if(fp->sp) ri_read_sig_slow5(fp, s, no_sig_filter);
 	#endif
 }

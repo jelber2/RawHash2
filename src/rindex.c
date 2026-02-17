@@ -219,7 +219,7 @@ ri_sig_t** ri_sig_read(pipeline_t *pl,
 		
 		ri_sig_t *s = (ri_sig_t*)calloc(1, sizeof(ri_sig_t));
 		rh_kv_push(ri_sig_t*, 0, rsigv, s);
-		ri_read_sig(pl->sfp, s, 1);
+		ri_read_sig(pl->sfp, s, 1, 0);
 		size += s->l_sig;
 
 		if(size >= chunk_size) break;
@@ -282,7 +282,7 @@ static void *worker_sig_pipeline(void *shared, int step, void *in)
 				float* s_values;
 				
 				if(!(p->ri->flag&RI_I_NO_EVENT_DETECTION))
-					s_values = detect_events(0, t->l_sig, t->sig, p->ri->window_length1, p->ri->window_length2, p->ri->threshold1, p->ri->threshold2, p->ri->peak_height, &s_sum, &s_std, &n_events_sum, &s_len);
+					s_values = detect_events(0, t->l_sig, t->sig, p->ri->window_length1, p->ri->window_length2, p->ri->threshold1, p->ri->threshold2, p->ri->peak_height, 0, 500, &s_sum, &s_std, &n_events_sum, &s_len);
 				else s_values = normalize_signal(0, t->sig, t->l_sig, &s_sum, &s_std, &n_events_sum, &s_len);
 				
 				short out = (p->ri->flag&RI_I_OUT_QUANTIZE)?1:0;

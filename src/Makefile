@@ -256,7 +256,7 @@ endif
 # =====================================================================
 SRCS = kthread.c kalloc.c bseq.c roptions.c sequence_until.c rutils.c \
        rsig.c revent.c rsketch.c rindex.c lchain.c rseed.c rmap.c \
-       dtw.c hit.c main.c
+       dtw.c hit.c rextdata.c main.c
 
 OBJS = $(SRCS:.c=.o)
 

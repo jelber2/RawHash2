@@ -1,132 +1,211 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+"""
+pafstats.py — Evaluation script for RawHash2 read mapping accuracy.
 
-import pandas as pd
-import numpy as np
-import argparse
+Compares RawHash2 PAF output against a minimap2 ground-truth PAF.
+Uses overlap-based TP/FP/FN/TN classification (same logic as UNCALLED pafstats).
+
+Usage (compatible with 'uncalled pafstats' interface):
+    python3 pafstats.py -r <ground_truth.paf> --annotate <rawhash2.paf> \
+        > annotated.paf 2> throughput.txt
+
+Output:
+    stdout: Annotated PAF (each line gets rf:Z:tp/fp/fn/tn/na appended)
+    stderr: Summary stats, confusion matrix, throughput (BP/sec)
+
+The annotated PAF is compatible with analyze_paf.py (expects 20 cols for mapped,
+15 cols for unmapped reads).
+
+Overlap-based classification logic from UNCALLED:
+    https://github.com/skovaka/UNCALLED/blob/master/uncalled/pafstats.py
+"""
+
 import sys
+import argparse
+import numpy as np
 
-import pandas as pd
 
-import pandas as pd
+class PafEntry:
+    """Represents a single PAF alignment record."""
 
-def read_paf(file_path, is_input_paf):
-    previous_query_id = None  # To track the previous read ID
-    mapped_pairs = set()
-    unmapped_pairs = set()
-    bases = []
-    signals = []
-    mt_ms = []
+    def __init__(self, line):
+        tabs = line.rstrip().split('\t')
+        self.qr_name = tabs[0]
+        self.qr_len = int(tabs[1])
+        self.is_mapped = tabs[4] != '*'
 
-    mt_col_index = None  # To store the index of the mt tag column
-    sl_col_index = None  # To store the index of the sl tag column
-
-    with open(file_path, 'r') as file:
-        for line_number, line in enumerate(file):
-            parts = line.strip().split('\t')
-            query_id = parts[0]
-            reference_id = parts[5]
-
-            # Dynamically find the mt column on the first line
-            if line_number == 0 and is_input_paf:
-                for index, part in enumerate(parts):
-                    if part.startswith('mt:f:'):
-                        mt_col_index = index
-                    elif part.startswith('sl:i:'):
-                        sl_col_index = index
-                if mt_col_index is None:
-                    raise ValueError("mt tag not found in the input PAF file.")
-                continue  # Skip the first line after finding mt column index
-
-            # Accuracy metrics: count all mappings
-            if reference_id != '*':
-                mapped_pairs.add((query_id, reference_id))
-            else:
-                unmapped_pairs.add((query_id, reference_id))
-
-            # Throughput calculations: check if current read ID is different from the previous one
-            if is_input_paf and query_id != previous_query_id:
-                if mt_col_index is not None and len(parts) > mt_col_index:
-                    mt_value = float(parts[mt_col_index].split(':')[-1])
-                    mt_ms.append(mt_value)
-                    bases.append(int(parts[1]))
-                    if sl_col_index is not None and len(parts) > sl_col_index:
-                        signals.append(int(parts[sl_col_index].split(':')[-1]))
-
-            previous_query_id = query_id  # Update previous_query_id to the current read ID
-
-    return mapped_pairs, unmapped_pairs, bases, mt_ms, signals
-
-def classify_pairs(input_mapped, input_unmapped, minimap2_mapped, minimap2_unmapped):
-    results = []
-    counts = {'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
-    all_pairs = input_mapped.union(input_unmapped, minimap2_mapped, minimap2_unmapped)
-
-    for pair in all_pairs:
-        if pair in input_mapped:
-            if pair in minimap2_mapped:
-                results.append((*pair, 'rf:Z:tp'))
-                counts['tp'] += 1
-            else:
-                results.append((*pair, 'rf:Z:fp'))
-                counts['fp'] += 1
-        elif pair in minimap2_mapped:
-            results.append((*pair, 'rf:Z:fn'))
-            counts['fn'] += 1
+        if self.is_mapped:
+            self.qr_st = int(tabs[2])
+            self.qr_en = int(tabs[3])
+            self.is_fwd = tabs[4] == '+'
+            self.rf_name = tabs[5]
+            self.rf_len = int(tabs[6])
+            self.rf_st = int(tabs[7])
+            self.rf_en = int(tabs[8])
         else:
-            results.append((*pair, 'rf:Z:tn'))
-            counts['tn'] += 1
+            self.qr_st = 1
+            self.qr_en = self.qr_len
+            self.is_fwd = None
+            self.rf_name = None
+            self.rf_len = None
+            self.rf_st = None
+            self.rf_en = None
 
-    return results, counts
+        self.raw_line = line.rstrip()
 
-import numpy as np
-import argparse
-import sys
+    def ext_ref(self, ext=1.0):
+        """Extend reference coordinates by a factor based on unmapped query ends."""
+        st_shift = int(self.qr_st * ext)
+        en_shift = int((self.qr_len - self.qr_en) * ext)
 
-def compute_throughput(bases, signals, mt_ms):
-    if not bases:
-        return 0, 0, 0, 0  # Avoid division by zero if no data
-    bps = [1000 * b / mt for b, mt in zip(bases, mt_ms)]  # Calculate bases per second
-    if not signals:
-        return np.mean(bps), np.median(bps), np.mean(mt_ms), np.median(mt_ms), 0, 0
-    sps = [1000 * s / mt for s, mt in zip(signals, mt_ms)]  # Calculate signals per second
-    mean_bps = np.mean(bps)
-    median_bps = np.median(bps)
-    mean_mt = np.mean(mt_ms)
-    median_mt = np.median(mt_ms)
-    mean_sps = np.mean(sps)
-    median_sps = np.median(sps)
-    return mean_bps, median_bps, mean_mt, median_mt, mean_sps, median_sps
+        if self.is_fwd:
+            return (max(1, self.rf_st - st_shift),
+                    min(self.rf_len, self.rf_en + en_shift))
+        else:
+            return (max(1, self.rf_st - en_shift),
+                    min(self.rf_len, self.rf_en + st_shift))
 
-def process_files(input_path, minimap2_path):
-    input_mapped, input_unmapped, bases, mt_ms, signals = read_paf(input_path, True)
-    minimap2_mapped, minimap2_unmapped, _, _, _ = read_paf(minimap2_path, False)
-    
-    classified_results, counts = classify_pairs(input_mapped, input_unmapped, minimap2_mapped, minimap2_unmapped)
+    def overlaps(self, other, ext=0.0):
+        """Check if two mapped entries overlap on the reference (with extension)."""
+        if not (self.is_mapped and other.is_mapped):
+            return False
+        if not self.rf_name.startswith(other.rf_name):
+            return False
+        st1, en1 = self.ext_ref(ext)
+        st2, en2 = other.ext_ref(ext)
+        return max(st1, st2) <= min(en1, en2)
 
-    total = sum(counts.values())
-    ratios = {k: v / total for k, v in counts.items()}
-    sys.stderr.write(f"Counts: {counts}\n")
-    sys.stderr.write(f"Ratios: {ratios}\n")
-    sys.stderr.write(f"TP: {counts['tp']}, FP: {counts['fp']}, FN: {counts['fn']}, TN: {counts['tn']}\n")
-    sys.stderr.write(f"Precision: {counts['tp'] / (counts['tp'] + counts['fp']) if counts['tp'] + counts['fp'] > 0 else 0}\n")
-    sys.stderr.write(f"Recall: {counts['tp'] / (counts['tp'] + counts['fn']) if counts['tp'] + counts['fn'] > 0 else 0}\n")
-    sys.stderr.write(f"F1 Score: {2 * counts['tp'] / (2 * counts['tp'] + counts['fp'] + counts['fn']) if 2 * counts['tp'] + counts['fp'] + counts['fn'] > 0 else 0}\n")
 
-    mean_bps, median_bps, mean_mt, median_mt, mean_sps, median_sps = compute_throughput(bases, signals, mt_ms)
-    sys.stderr.write(f"Speed            Mean    Median\n")
-    sys.stderr.write(f"BP per sec: %9.2f %9.2f\n" % (mean_bps, median_bps))
-    sys.stderr.write(f"Signals per sec: %9.2f %9.2f\n" % (mean_sps, median_sps))
-    sys.stderr.write(f"MS to map:  %9.2f %9.2f\n" % (mean_mt, median_mt))
+def parse_paf(filepath):
+    """Parse a PAF file, yielding PafEntry objects. Skips comment/log lines."""
+    with open(filepath) as f:
+        for line in f:
+            if line.startswith('#') or line.startswith('['):
+                continue
+            tabs = line.rstrip().split('\t')
+            if len(tabs) < 12:
+                # Skip malformed/truncated lines
+                continue
+            yield PafEntry(line)
 
-    # for result in classified_results:
-    #     print('\t'.join(map(str, result)))
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description='Compare PAF files to classify read pairs.')
-    parser.add_argument('input_path', type=str, help='Path to input.paf file.')
-    parser.add_argument('minimap2_path', type=str, help='Path to minimap2.paf file.')
-    return parser.parse_args()
+def classify_reads(query_entries, ref_entries, ext=1.5):
+    """
+    Classify query reads against reference using overlap-based comparison.
 
-if __name__ == "__main__":
-    args = parse_arguments()
-    process_files(args.input_path, args.minimap2_path)
+    For each query read:
+      - If mapped in query:
+        - If reference has no mapping for this read → 'na' (false positive, unmapped in ref)
+        - If overlaps reference mapping (with ext) → 'tp'
+        - Otherwise → 'fp'
+      - If unmapped in query:
+        - If reference has no mapping → 'tn'
+        - If reference has a mapping → 'fn'
+
+    Returns list of (PafEntry, label) tuples.
+    """
+    # Build reference lookup: read_name → list of PafEntry
+    ref_locs = {}
+    for r in ref_entries:
+        ref_locs.setdefault(r.qr_name, []).append(r)
+
+    results = []
+
+    for q in query_entries:
+        refs = ref_locs.get(q.qr_name, None)
+
+        if q.is_mapped:
+            if refs is None or not refs[0].is_mapped:
+                # Mapped in query but not in reference
+                results.append((q, 'na'))
+                continue
+
+            match = False
+            for r in refs:
+                if q.overlaps(r, ext):
+                    match = True
+                    break
+
+            if match:
+                results.append((q, 'tp'))
+            else:
+                results.append((q, 'fp'))
+        else:
+            if refs is None or not refs[0].is_mapped:
+                results.append((q, 'tn'))
+            else:
+                results.append((q, 'fn'))
+
+    return results
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Compare RawHash2 PAF against minimap2 ground truth.')
+    parser.add_argument('infile', type=str,
+                        help='RawHash2 PAF file')
+    parser.add_argument('-r', '--ref-paf', required=True, type=str,
+                        help='Reference (minimap2) PAF file')
+    parser.add_argument('-a', '--annotate', action='store_true',
+                        help='Output annotated PAF to stdout (with rf:Z: tag)')
+    args = parser.parse_args()
+
+    statsout = sys.stderr if args.annotate else sys.stdout
+
+    # Parse both PAF files
+    query_entries = list(parse_paf(args.infile))
+    ref_entries = list(parse_paf(args.ref_paf))
+
+    num_mapped = sum(1 for p in query_entries if p.is_mapped)
+    statsout.write("Summary: %d reads, %d mapped (%.2f%%)\n\n" %
+                   (len(query_entries), num_mapped,
+                    100 * num_mapped / len(query_entries) if query_entries else 0))
+
+    # Classify reads
+    results = classify_reads(query_entries, ref_entries)
+
+    # Count classifications
+    counts = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0, 'na': 0}
+    for _, label in results:
+        counts[label] += 1
+
+    n = len(results)
+    ntp, ntn, nfp, nfn, nna = counts['tp'], counts['tn'], counts['fp'], counts['fn'], counts['na']
+
+    statsout.write("Comparing to reference PAF\n")
+    statsout.write("     P     N\n")
+    statsout.write("T %6.2f %5.2f\n" % (100 * ntp / n, 100 * ntn / n))
+    statsout.write("F %6.2f %5.2f\n" % (100 * (nfp) / n, 100 * nfn / n))
+    statsout.write("NA: %.2f\n\n" % (100 * nna / n))
+
+    # Output annotated PAF
+    if args.annotate:
+        for entry, label in results:
+            sys.stdout.write("%s\trf:Z:%s\n" % (entry.raw_line, label))
+
+    # Throughput stats (from mt:f: tag)
+    map_ms = []
+    map_bp = []
+    for entry, _ in results:
+        if entry.is_mapped:
+            # Extract mt:f: tag from raw line
+            for field in entry.raw_line.split('\t')[12:]:
+                if field.startswith('mt:f:'):
+                    mt = float(field.split(':')[2])
+                    map_ms.append(mt)
+                    map_bp.append(entry.qr_en)
+                    break
+
+    if map_ms:
+        map_ms = np.array(map_ms)
+        map_bp = np.array(map_bp)
+        map_bpps = 1000 * map_bp / map_ms
+
+        statsout.write("Speed            Mean    Median\n")
+        statsout.write("BP per sec: %9.2f %9.2f\n" % (np.mean(map_bpps), np.median(map_bpps)))
+        statsout.write("BP mapped:  %9.2f %9.2f\n" % (np.mean(map_bp), np.median(map_bp)))
+        statsout.write("MS to map:  %9.2f %9.2f\n" % (np.mean(map_ms), np.median(map_ms)))
+
+
+if __name__ == '__main__':
+    main()

@@ -5,6 +5,7 @@
 
 #include "rawhash.h"
 #include "ketopt.h"
+#include "rextdata.h"
 
 #define RH_VERSION "2.1"
 
@@ -81,6 +82,11 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"io-thread",			ko_required_argument, 	369 },
 	{ (char*)"min-score2",			ko_required_argument, 	370 },
 	{ (char*)"version",				ko_no_argument, 	  	371 },
+	{ (char*)"peaks-file",			ko_required_argument, 	372 },
+	{ (char*)"events-file",			ko_required_argument, 	373 },
+	{ (char*)"moves-file",			ko_required_argument, 	374 },
+	{ (char*)"min-seg-length",		ko_required_argument, 	375 },
+	{ (char*)"max-seg-length",		ko_required_argument, 	376 },
 	{ 0, 0, 0 }
 };
 
@@ -261,7 +267,7 @@ int main(int argc, char *argv[])
   	ri_idxopt_t ipt;
 	int c, n_threads = 3, io_n_threads = 1;
 	// int n_parts;
-	char *fnw = 0, *fpore = 0, *s;
+	char *fnw = 0, *fpore = 0, *fpeaks = 0, *fevents = 0, *fmoves = 0, *s;
 	FILE *fp_help = stderr;
 	ri_idx_reader_t *idx_rdr;
 	ri_idx_t *ri;
@@ -423,110 +429,141 @@ int main(int argc, char *argv[])
 		else if (c == 369) {io_n_threads = atoi(o.arg);}// --io-thread
 		else if (c == 370) opt.min_chaining_score2 = atoi(o.arg);// --min-score2
 		else if (c == 371) {puts(RH_VERSION); return 0;}// --version
+		else if (c == 372) fpeaks = o.arg; // --peaks-file
+		else if (c == 373) fevents = o.arg; // --events-file
+		else if (c == 374) fmoves = o.arg; // --moves-file
+		else if (c == 375) opt.min_segment_length = (uint32_t)atoi(o.arg); // --min-seg-length
+		else if (c == 376) opt.max_segment_length = (uint32_t)atoi(o.arg); // --max-seg-length
 		else if (c == 'V') {puts(RH_VERSION); return 0;}
 	}
 
+	if ((fpeaks != 0) + (fevents != 0) + (fmoves != 0) > 1) {
+		fprintf(stderr, "[ERROR] --peaks-file, --events-file, and --moves-file are mutually exclusive. Specify only one.\n");
+		return 1;
+	}
+
 	if (argc == o.ind || fp_help == stdout) {
-		fprintf(fp_help, "Usage: rawhash [options] <target.fa>|<target.idx> [query.fast5] [...]\n");
+		fprintf(fp_help, "Usage: rawhash2 [options] <target.fa>|<target.idx> [query.fast5|.pod5|.slow5] [...]\n");
 		fprintf(fp_help, "Options:\n");
 
-		fprintf(fp_help, "    --version     show version number\n");
-		
-		fprintf(fp_help, "  K-mer (pore) Model:\n");
-		fprintf(fp_help, "    -p FILE      pore model FILE [].\n");
-		fprintf(fp_help, "    -k INT       size of the k-mers in the pore model [%d]. This is usually 6 for R9.4 and 9 for R10.\n", ipt.k);
-		fprintf(fp_help, "    --level_column INT       0-based column index where the mean values are stored in the pore file [%d]. This is usually 1 for both R9.4 and R10.\n", ipt.lev_col);
-		
+		fprintf(fp_help, "  General:\n");
+		fprintf(fp_help, "    -h           show this help message\n");
+		fprintf(fp_help, "    --version    show version number\n");
+
+		fprintf(fp_help, "\n  Pore Model:\n");
+		fprintf(fp_help, "    -p FILE      pore model file []\n");
+		fprintf(fp_help, "    -k INT       k-mer size in the pore model [%d]. Typically 6 for R9.4, 9 for R10\n", ipt.k);
+		fprintf(fp_help, "    --level_column INT   0-based column for mean values in pore file [%d]\n", ipt.lev_col);
+
 		fprintf(fp_help, "\n  Indexing:\n");
-		fprintf(fp_help, "    -d FILE     [Strongly recommended to create before mapping] dump index to FILE [].\n");
-		fprintf(fp_help, "    -e INT     number of events concatanated in a single hash (usually no larger than 10). Also applies during mapping [%d].\n", ipt.e);
-		fprintf(fp_help, "    -q INT     Number of bits to use for quantization [%d]. Number of quantized buckets are created accordingly (2^INT).\n", ipt.q);
-		fprintf(fp_help, "    -w INT     minimizer window size [%d]. Enables minimizer-based seeding in indexing and mapping (may reduce accuracy but improves the performance and memory space efficiency).\n", ipt.w);
-		fprintf(fp_help, "    --store-sig      Stores the target signal in the index file.\n");
-		fprintf(fp_help, "    --sig-target     The target sequence (reference) contains signals rather than base characters.\n");
-		fprintf(fp_help, "    --sig-diff FLOAT    [Advanced] Signal value (FLOAT) difference between two consecutive events to be packed together in a single hash value [%g].\n", ipt.diff);
+		fprintf(fp_help, "    -d FILE      dump index to FILE (strongly recommended before mapping) []\n");
+		fprintf(fp_help, "    -e INT       events per hash value [%d]. Also applies during mapping\n", ipt.e);
+		fprintf(fp_help, "    -q INT       quantization bits [%d]. Creates 2^INT buckets\n", ipt.q);
+		fprintf(fp_help, "    -w INT       minimizer window size [%d]. >0 enables minimizer seeding (faster, less accurate)\n", ipt.w);
+		fprintf(fp_help, "    --sig-diff FLOAT   min difference between consecutive events for hashing [%g]\n", ipt.diff);
+		fprintf(fp_help, "    --store-sig  store reference signal in index (required for DTW alignment)\n");
+		fprintf(fp_help, "    --sig-target reference contains signal values instead of bases (for overlapping)\n");
 
-		// fprintf(fp_help, "    -n NUM     number of consecutive seeds to use for BLEND-based seeding [%d]. Enables the BLEND mechanism (may improve accuracy but reduces the performance at the moment)\n", ipt.n);
-		
 		fprintf(fp_help, "\n  Seeding:\n");
-		fprintf(fp_help, "    --q-mid-occ INT1[,INT2]     Lower and upper bounds of k-mer occurrences [%d, %d]. The final k-mer occurrence threshold is max{INT1, min{INT2, --occ-frac}}. This option prevents excessively small or large -f estimated from the input reference.\n", opt.min_mid_occ, opt.max_mid_occ);
-		// fprintf(fp_help, "    --occ-frac FLOAT     Discard a query seed if its occurrence is higher than FLOAT fraction of all query seeds [%g]. Set 0 to disable. [Note: Both --q-mid-occ and --occ-frac should be met for a seed to be discarded].\n", opt.q_occ_frac);
-		
-		fprintf(fp_help, "\n  Chaining Parameters:\n");
-		fprintf(fp_help, "    --min-events INT     minimum number of INT events in a chunk to start chain elongation [%u].\n", opt.min_events);
-		fprintf(fp_help, "    --bw INT     maximum INT gap length in a chain [%d].\n", opt.bw);
-		fprintf(fp_help, "    --max-target-gap INT     maximum INT target gap length in a chain [%d].\n", opt.max_target_gap_length);
-		fprintf(fp_help, "    --max-query-gap INT     maximum INT query gap length in a chain [%d].\n", opt.max_query_gap_length);
-		fprintf(fp_help, "    --min-anchors INT     chain is discarded if it contains less than INT number of anchors [%d].\n", opt.min_num_anchors);
-		fprintf(fp_help, "    --best-chains INT     best INT secondary chains to keep with their primary chains when making the mapping decisions [%d]\n", opt.best_n);
-		fprintf(fp_help, "    --min-score INT     chain is discarded if its score is < INT [%d]\n", opt.min_chaining_score);
-		fprintf(fp_help, "    --chain-gap-scale FLOAT     [Advanced] Determines [chain gap penalty] = FLOAT * 0.01 * e  [%g]\n", opt.chain_gap_scale);
-		fprintf(fp_help, "    --chain-skip-scale FLOAT     [Advanced] Determines [chain skip penalty] = FLOAT * 0.01 * e  [%g]\n", opt.chain_skip_scale);
-		// fprintf(fp_help, "    --chain-match-score INT     [Advanced] Match score (Used in MAPQ and Primary chain identification) [%d]\n", opt.a);
-		fprintf(fp_help, "    --primary-ratio FLOAT     [Advanced] The chain is primary if its region ratio uncovered by other chains is larger than FLOAT [%g]\n", opt.mask_level);
-		fprintf(fp_help, "    --primary-length INT     [Advanced] The chain is primary if its region length uncovered by other chains is larger than INT [%d]\n", opt.mask_len);
-		fprintf(fp_help, "    --max-skips INT     [Advanced] stop looking for a predecessor for an anchor if the best predecessor is not updated after INT many iterations [%d]\n", opt.max_num_skips);
-		fprintf(fp_help, "    --max-iterations INT     [Advanced] maximum INT number predecessor anchors to check to calculate the best score for an anchor [%d]\n", opt.max_chain_iter);
-		fprintf(fp_help, "    --rmq     [Advanced] Uses RMQ-based chaining. Faster but less accurate than default (DP)\n");
-		fprintf(fp_help, "    --rmq-inner-dist INT     [Advanced] RMQ inner distance [%d]\n", opt.rmq_inner_dist);
+		fprintf(fp_help, "    --q-mid-occ INT1[,INT2]   k-mer occurrence bounds [%d,%d]\n", opt.min_mid_occ, opt.max_mid_occ);
+
+		fprintf(fp_help, "\n  Chaining:\n");
+		fprintf(fp_help, "    --min-events INT       min events per chunk before chaining [%u]\n", opt.min_events);
+		fprintf(fp_help, "    --bw INT               max gap in chain [%d]\n", opt.bw);
+		fprintf(fp_help, "    --max-target-gap INT   max reference gap in chain [%d]\n", opt.max_target_gap_length);
+		fprintf(fp_help, "    --max-query-gap INT    max query gap in chain [%d]\n", opt.max_query_gap_length);
+		fprintf(fp_help, "    --min-anchors INT      min anchors per chain [%d]\n", opt.min_num_anchors);
+		fprintf(fp_help, "    --min-score INT        min chain score [%d]\n", opt.min_chaining_score);
+		fprintf(fp_help, "    --best-chains INT      secondary chains to keep [%d]\n", opt.best_n);
+		fprintf(fp_help, "    --chain-gap-scale FLOAT     gap penalty scale [%g]\n", opt.chain_gap_scale);
+		fprintf(fp_help, "    --chain-skip-scale FLOAT    skip penalty scale [%g]\n", opt.chain_skip_scale);
+		fprintf(fp_help, "    --primary-ratio FLOAT  [Advanced] primary chain coverage ratio [%g]\n", opt.mask_level);
+		fprintf(fp_help, "    --primary-length INT   [Advanced] primary chain coverage length [%d]\n", opt.mask_len);
+		fprintf(fp_help, "    --max-skips INT        [Advanced] stop after INT iterations w/o improvement [%d]\n", opt.max_num_skips);
+		fprintf(fp_help, "    --max-iterations INT   [Advanced] max predecessor anchors to check [%d]\n", opt.max_chain_iter);
+		fprintf(fp_help, "    --rmq                  [Advanced] use RMQ chaining (faster, less accurate)\n");
+		fprintf(fp_help, "    --rmq-inner-dist INT   [Advanced] RMQ inner distance [%d]\n", opt.rmq_inner_dist);
 		fprintf(fp_help, "    --rmq-size-cap INT     [Advanced] RMQ cap size [%d]\n", opt.rmq_size_cap);
-		fprintf(fp_help, "    --bw-long INT     [Advanced] maximum long INT gap length to re-chain the chains. Disabled by default. To enable, set it to larger than --bw [%d]\n", opt.bw_long);
+		fprintf(fp_help, "    --bw-long INT          [Advanced] long gap re-chaining threshold (>--bw to enable) [%d]\n", opt.bw_long);
 
-		fprintf(fp_help, "\n  DTW Parameters (as introduced in RawAlign):\n");
-		fprintf(fp_help, "    --dtw-evaluate-chains     evaluate chains using DTW. Note, the index must be built using --store-sig for this functionality to work [%s]\n", opt.flag & RI_M_DTW_EVALUATE_CHAINS? "yes" : "no");
-		fprintf(fp_help, "    --dtw-output-cigar     output CIGAR string for DTW [%s]\n", opt.flag & RI_M_DTW_OUTPUT_CIGAR? "yes" : "no");
-		fprintf(fp_help, "    --dtw-border-constraint STR     DTW border constraint: 'global', 'sparse' (i.e., align only between anchors), 'local' [%s]\n", ri_maptopt_dtw_mode_to_string(opt.dtw_border_constraint));
-		fprintf(fp_help, "    --dtw-match-bonus FLOAT     DTW match bonus FLOAT [%g]\n", opt.dtw_match_bonus);
-		
-		fprintf(fp_help, "\n  Mapping Decisions (Mapping and sequencing is stopped after taking any of these decisions):\n");
-		fprintf(fp_help, "    --max-chunks INT     stop mapping (read not mapped) after sequencing INT number of chunks [%u]\n", opt.max_num_chunk);
-		fprintf(fp_help, "    --min-mapq INT     map the read if there is only one chain and its MAPQ > INT [%d]\n", opt.min_mapq);
-		fprintf(fp_help, "    --disable-adaptive     Disables stopping the read early and rather lets the read to be sequenced fully to make the analysis. This is not activated by default.\n");
-		
-		fprintf(fp_help, "\n  Nanopore Parameters:\n");
-		fprintf(fp_help, "    --bp-per-sec INT     DNA molecules transiting through the pore (bp per second) [%u]\n", opt.bp_per_sec);
-		fprintf(fp_help, "    --sample-rate INT     current sample rate in Hz [%u]\n", opt.sample_rate);
-		fprintf(fp_help, "    --chunk-size INT     current samples in a single chunk (by default set to the amount of signals sampled in 1 second) [%u]\n", opt.chunk_size);
-		
-		fprintf(fp_help, "    --seg-window-length1 INT     [Advanced] First window length in segmentation [%u]\n", opt.window_length1);
-		fprintf(fp_help, "    --seg-window-length2 INT     [Advanced] Second window length in segmentation [%u]\n", opt.window_length2);
-		fprintf(fp_help, "    --seg-threshold1 FLOAT     [Advanced] Peak value threshold for the first window in segmentation [%g]\n", opt.threshold1);
-		fprintf(fp_help, "    --seg-threshold2 FLOAT     [Advanced] Peak value threshold for the first window in segmentation [%g]\n", opt.threshold2);
-		fprintf(fp_help, "    --seg-peak-height FLOAT     [Advanced] Peak height than the current signal to confirm the peak point in segmentation [%g]\n", opt.peak_height);
+		fprintf(fp_help, "\n  Mapping:\n");
+		fprintf(fp_help, "    --max-chunks INT       stop after INT chunks if unmapped [%u]\n", opt.max_num_chunk);
+		fprintf(fp_help, "    --min-mapq INT         report mapping if MAPQ > INT [%d]\n", opt.min_mapq);
+		fprintf(fp_help, "    --disable-adaptive     process entire signal (no early stopping)\n");
 
-		fprintf(fp_help, "\n  Sequence Until Parameters:\n");
-		fprintf(fp_help, "    --sequence-until     Activates Sequence Until and performs real-time relative abundance calculations. The computation will stop as soon as an estimation with high confidence is reached without processing further reads from the set.\n");
-		fprintf(fp_help, "    --threshold FLOAT     outliers are determined if cross-correlation distance > FLOAT [%g]. Sequencing will stop if there are no outliers in the sample of estimations.\n", opt.t_threshold);
-		fprintf(fp_help, "    --n-samples INT     New estimation is tested against INT many previous estimations [%u]\n", opt.tn_samples);
-		fprintf(fp_help, "    --test-frequency INT     Make a new estimation after every INT reads [%u]\n", opt.ttest_freq);
-		fprintf(fp_help, "    --min-reads INT     Minimum number of reads to sequence before making the first estimation [%u]\n", opt.tmin_reads);
-		
+		fprintf(fp_help, "\n  Signal Alignment (DTW, as introduced in RawAlign):\n");
+		fprintf(fp_help, "    --dtw-evaluate-chains        score chains using DTW alignment [%s]\n", opt.flag & RI_M_DTW_EVALUATE_CHAINS? "yes" : "no");
+		fprintf(fp_help, "                                 (index must be built with --store-sig)\n");
+		fprintf(fp_help, "    --dtw-output-cigar           include CIGAR string in output [%s]\n", opt.flag & RI_M_DTW_OUTPUT_CIGAR? "yes" : "no");
+		fprintf(fp_help, "    --dtw-border-constraint STR  alignment scope: global, sparse, local [%s]\n", ri_maptopt_dtw_mode_to_string(opt.dtw_border_constraint));
+		fprintf(fp_help, "    --dtw-fill-method STR        matrix computation: full, banded[=FRAC] [banded]\n");
+		fprintf(fp_help, "    --dtw-match-bonus FLOAT      match score bonus [%g]\n", opt.dtw_match_bonus);
+		fprintf(fp_help, "    --dtw-min-score FLOAT        min DTW score to report alignment [%g]\n", opt.dtw_min_score);
+
+		fprintf(fp_help, "\n  Nanopore Device:\n");
+		fprintf(fp_help, "    --bp-per-sec INT       translocation speed in bp/s [%u]\n", opt.bp_per_sec);
+		fprintf(fp_help, "    --sample-rate INT      sampling rate in Hz [%u]\n", opt.sample_rate);
+		fprintf(fp_help, "    --chunk-size INT       samples per chunk [%u]\n", opt.chunk_size);
+
+		fprintf(fp_help, "\n  Signal Segmentation (t-test peak detection):\n");
+		fprintf(fp_help, "    --seg-window-length1 INT   short detector window [%u]\n", opt.window_length1);
+		fprintf(fp_help, "    --seg-window-length2 INT   long detector window [%u]\n", opt.window_length2);
+		fprintf(fp_help, "    --seg-threshold1 FLOAT     peak threshold for short window [%g]\n", opt.threshold1);
+		fprintf(fp_help, "    --seg-threshold2 FLOAT     peak threshold for long window [%g]\n", opt.threshold2);
+		fprintf(fp_help, "    --seg-peak-height FLOAT    min peak prominence [%g]\n", opt.peak_height);
+		fprintf(fp_help, "    --min-seg-length INT       skip segments shorter than INT [%u]\n", opt.min_segment_length);
+		fprintf(fp_help, "    --max-seg-length INT       skip segments longer than INT [%u]\n", opt.max_segment_length);
+
+		fprintf(fp_help, "\n  External Segmentation:\n");
+		fprintf(fp_help, "    --peaks-file FILE   use pre-computed peak positions from FILE\n");
+		fprintf(fp_help, "                        Bypasses t-test peak detection; event generation still runs.\n");
+		fprintf(fp_help, "                        Format: read_id<TAB>peak1 peak2 ... peakN\n");
+		fprintf(fp_help, "    --events-file FILE  use pre-computed event values from FILE\n");
+		fprintf(fp_help, "                        Completely bypasses the event detection pipeline.\n");
+		fprintf(fp_help, "                        Format: read_id<TAB>ev1 ev2 ... evN\n");
+		fprintf(fp_help, "    --moves-file FILE   use dorado move table data from FILE\n");
+		fprintf(fp_help, "                        Converts move boundaries to segmentation peaks.\n");
+		fprintf(fp_help, "                        Format: read_id<TAB>mv:B:c,STRIDE,0,1,...<TAB>ts:i:OFFSET\n");
+		fprintf(fp_help, "                        Use test/scripts/extract_moves_from_bam.sh to generate this file.\n");
+		fprintf(fp_help, "    Note: --peaks-file, --events-file, and --moves-file are mutually exclusive.\n");
+
+		fprintf(fp_help, "\n  Sequence Until (real-time abundance estimation):\n");
+		fprintf(fp_help, "    --sequence-until       activate Sequence Until mode\n");
+		fprintf(fp_help, "    --threshold FLOAT      outlier distance threshold [%g]\n", opt.t_threshold);
+		fprintf(fp_help, "    --n-samples INT        previous estimations to compare [%u]\n", opt.tn_samples);
+		fprintf(fp_help, "    --test-frequency INT   re-estimate every INT reads [%u]\n", opt.ttest_freq);
+		fprintf(fp_help, "    --min-reads INT        min reads before first estimate [%u]\n", opt.tmin_reads);
+
 		fprintf(fp_help, "\n  Input/Output:\n");
-		fprintf(fp_help, "    -o FILE     output mappings to FILE [stdout]\n");
-		fprintf(fp_help, "    -t INT      number of threads [%d]\n", n_threads);
-		fprintf(fp_help, "    --io-thread INT      number of threads allocated for IO operations (i.e., reading from a file) out of all threads that will be used for this run (-t). Only available for S/BLOW5 files for now. INT must be smaller than the overall number of threads (-t) [%d]\n", io_n_threads);
-		fprintf(fp_help, "    -K NUM      minibatch size for mapping [500M]. Increasing this value may increase thread utilization. If there are many larger FAST5 files, it is recommended to keep this value between 500M - 5G to use less memory while utilizing threads nicely.\n");
-//		fprintf(fp_help, "    -v INT     verbose level [%d]\n", ri_verbose);
+		fprintf(fp_help, "    -o FILE      output file [stdout]\n");
+		fprintf(fp_help, "    -t INT       number of threads [%d]\n", n_threads);
+		fprintf(fp_help, "    --io-thread INT   I/O threads for S/BLOW5 (must be < -t) [%d]\n", io_n_threads);
+		fprintf(fp_help, "    -K NUM       minibatch size [500M]\n");
 
-		fprintf(fp_help, "\n  Experimental/Debugging Parameters:\n");
-		fprintf(fp_help, "    --out-quantize     	Output the quantized values from raw signals provided as input. Mapping is not performed and the index file is not needed.\n");
-		fprintf(fp_help, "    --no-event-detection  Do not perform event detection. This can be set if your raw signal is already segmented.\n");
-		
 		fprintf(fp_help, "\n  Presets:\n");
-		fprintf(fp_help, "    --depletion     Should be used for quickly depleting organisms for use cases that require high precision (e.g., for contamination analysis or relative abundance estimation). Can be used with or without the -x preset (--best-chains 5 --min-mapq 10 --w-threshold 0.5 --min-anchors 2 --min-score 15 --chain-skip-scale 0).\n");
-		fprintf(fp_help, "    --r10     Sets the segmentation parameters for R10.4.1. Can be used with or without the -x preset (-k9 --seg-window-length1 3 --seg-window-length2 6 --seg-threshold1 6.5 --seg-threshold2 4 --seg-peak-height 0.2 --chain-gap-scale 1.2).\n");
-		fprintf(fp_help, "    -x STR     preset (always applied before other options) []\n");
-		fprintf(fp_help, "                 - viral     Enables accurate mapping to very small genomes such as viral genomes (-e 6 -q 4 --max-chunks 5 --bw 100 --max-target-gap 500 --max-target-gap 500 --min-score 10 --chain-gap-scale 1.2 --chain-skip-scale 0.3).\n");
-		fprintf(fp_help, "                 - sensitive     Enables sensitive mapping. Suitable when working with small genomes of size < 500M (-e 8 -q 4 --fine-range 0.4).\n");
-		fprintf(fp_help, "                 - fast     Enables fast mapping with slightly reduced accuracy. Suitable when reads are mapped to large genomes of size > 500M and < 5Gb (-e 8 -q 4 --max-chunks 20).\n");
-		fprintf(fp_help, "                 - faster     Enables faster mapping than '-x fast' and reduced memory space usage for indexing with slightly reduced accuracy. This mechanism uses the minimizer sketching technique and should be used when '-x fast' cannot meet the real-time requirements for a particular genome (e.g., for very large genomes > 5Gb)\n");
-		fprintf(fp_help, "\n  Rawsamble Presets:\n");
-		fprintf(fp_help, "                 - ava     	 All-vs-all overlapping mode (default for Rawsamble).\n");
-		fprintf(fp_help, "                 - ava-sensitive     	 More sensitive All-vs-all overlapping mode. Can be slightly slower than -ava but likely to generate longer unitigs in downstream asssembly.\n");
-		fprintf(fp_help, "                 - ava-viral     	 All-vs-all overlapping for very small genomes such as viral genomes.\n");
-		fprintf(fp_help, "                 - ava-large     	 All-vs-all overlapping for large genomes of size > 10Gb\n");
-		
-		// fprintf(fp_help, "\nSee `man ./rawhash.1' for detailed description of these and other advanced command-line options.\n");
+		fprintf(fp_help, "    -x STR       preset (applied before other options) []\n");
+		fprintf(fp_help, "      Mapping presets:\n");
+		fprintf(fp_help, "        viral       small viral genomes (<10M)\n");
+		fprintf(fp_help, "        sensitive   small genomes (<500M, default accuracy)\n");
+		fprintf(fp_help, "        fast        large genomes (500M-5G, faster)\n");
+		fprintf(fp_help, "        faster      very large genomes (>5G, uses minimizers)\n");
+		fprintf(fp_help, "      Rawsamble (overlapping) presets:\n");
+		fprintf(fp_help, "        ava            all-vs-all overlapping (default for Rawsamble)\n");
+		fprintf(fp_help, "        ava-sensitive  more sensitive overlapping\n");
+		fprintf(fp_help, "        ava-viral      overlapping for viral genomes\n");
+		fprintf(fp_help, "        ava-large      overlapping for large genomes (>10G)\n");
+		fprintf(fp_help, "    --depletion  high-precision mode for contamination/abundance analysis\n");
+		fprintf(fp_help, "    --r10        R10.4.1 device and segmentation parameters\n");
+
+		fprintf(fp_help, "\n  Debug/Logging:\n");
+		fprintf(fp_help, "    --out-quantize              output quantized signal values (no mapping performed)\n");
+		fprintf(fp_help, "    --no-event-detection        skip t-test segmentation (use with external segmentation data)\n");
+		fprintf(fp_help, "    --log-anchors               log seed/anchor positions to stderr\n");
+		fprintf(fp_help, "    --log-num-anchors           log anchor counts per read to stderr\n");
+		fprintf(fp_help, "    --output-chains             log chain details to stderr\n");
+		fprintf(fp_help, "    --dtw-log-scores            log DTW alignment scores to stderr\n");
+		fprintf(fp_help, "    --no-chainingscore-filtering   disable chain score filtering\n");
+
 		return fp_help == stdout? 0 : 1;
 	}
 
@@ -573,6 +610,31 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (fpeaks) {
+		opt.ext_peaks = ri_load_ext_peaks(fpeaks);
+		if (!opt.ext_peaks) {
+			fprintf(stderr, "[ERROR] failed to load peaks file '%s'\n", fpeaks);
+			ri_idx_reader_close(idx_rdr);
+			return 1;
+		}
+	}
+	if (fevents) {
+		opt.ext_events = ri_load_ext_events(fevents);
+		if (!opt.ext_events) {
+			fprintf(stderr, "[ERROR] failed to load events file '%s'\n", fevents);
+			ri_idx_reader_close(idx_rdr);
+			return 1;
+		}
+	}
+	if (fmoves) {
+		opt.ext_peaks = ri_load_ext_moves(fmoves);
+		if (!opt.ext_peaks) {
+			fprintf(stderr, "[ERROR] failed to load moves file '%s'\n", fmoves);
+			ri_idx_reader_close(idx_rdr);
+			return 1;
+		}
+	}
+
 	while ((ri = ri_idx_reader_read(idx_rdr, &pore, n_threads, io_n_threads)) != 0) {
 		int ret;
 		if (ri_verbose >= 3)
@@ -605,6 +667,8 @@ int main(int argc, char *argv[])
 	ri_idx_reader_close(idx_rdr);
 	if(pore.pore_vals)free(pore.pore_vals);
 	if(pore.pore_inds)free(pore.pore_inds);
+	if(opt.ext_peaks) ri_destroy_ext_peaks(opt.ext_peaks);
+	if(opt.ext_events) ri_destroy_ext_events(opt.ext_events);
 
 	if (fflush(stdout) == EOF) {
 		perror("[ERROR] failed to write the results");

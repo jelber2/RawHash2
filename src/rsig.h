@@ -112,13 +112,17 @@ void ri_seq_to_sig(const char *str,
 /**
  * Reads the entire signal values of the next read from a file
  *
- * @param fp	file pointer to the signal file (i.e., either FAST5 or SLOW5)
- * @param s		attribute of the read and the signal values.
- * 				$s->name = name of the read
- * 				$s->sig = signal values
- * 				$s->l_sig = number of signal values
+ * @param fp				file pointer to the signal file (i.e., either FAST5 or SLOW5)
+ * @param s					attribute of the read and the signal values.
+ * 							$s->name = name of the read
+ * 							$s->sig = signal values
+ * 							$s->l_sig = number of signal values
+ * @param io_n_threads		number of I/O threads
+ * @param no_sig_filter		if non-zero, skip the pA range filter (30-200 pA).
+ * 							Used when external peaks/events are provided so that
+ * 							signal indices remain consistent.
  */
-void ri_read_sig(ri_sig_file_t* fp, ri_sig_t* s, int io_n_threads);
+void ri_read_sig(ri_sig_file_t* fp, ri_sig_t* s, int io_n_threads, int no_sig_filter);
 
 /**
  * Recursively find all files that ends with "fast5" under input directory const char *A

@@ -181,12 +181,14 @@ float calculate_mean_of_filtered_segment(float* segment,
 
 /**
  * @brief Generates events from peaks, prefix sums and s_len.
- * 
+ *
  * @param km Pointer to memory manager.
+ * @param sig Pointer to normalized signal array.
  * @param peaks Array of peak positions.
  * @param peak_size Size of peaks array.
- * @param prefix_sum Array of prefix sums.
  * @param s_len Length of the signal.
+ * @param min_seg_len Minimum segment length (skip shorter segments, 0 = no min filter).
+ * @param max_seg_len Maximum segment length (skip longer segments).
  * @param n_events Pointer to the number of events generated.
  * @return float* Pointer to the array of generated events.
  */
@@ -195,6 +197,8 @@ static inline float* gen_events(void *km,
 								const uint32_t *peaks,
 								const uint32_t peak_size,
 								const uint32_t s_len,
+								const uint32_t min_seg_len,
+								const uint32_t max_seg_len,
 								uint32_t* n_events)
 {
 	uint32_t n_ev = 0;
@@ -210,7 +214,7 @@ static inline float* gen_events(void *km,
 		if (!(peaks[pi] > 0 && peaks[pi] < s_len)) continue;
 
     	segment_length = peaks[pi] - start_idx;
-		if (segment_length < 500) // Skip if the segment is too long
+		if (segment_length >= min_seg_len && segment_length < max_seg_len)
 			events[i++] = calculate_mean_of_filtered_segment(sig + start_idx, segment_length);
 		start_idx = peaks[pi];
 	}
@@ -263,6 +267,8 @@ float* detect_events(void *km,
 					 const float threshold1,
 					 const float threshold2,
 					 const float peak_height,
+					 const uint32_t min_seg_len,
+					 const uint32_t max_seg_len,
 					 double* mean_sum,
 					 double* std_dev_sum,
 					 uint32_t* n_events_sum,
@@ -310,8 +316,69 @@ float* detect_events(void *km,
 	ri_kfree(km, tstat1); ri_kfree(km, tstat2); ri_kfree(km, prefix_sum); ri_kfree(km, prefix_sum_square);
 
 	float* events = 0;
-	if(n_peaks > 0) events = gen_events(km, norm_signals, peaks, n_peaks, n_signals, n_events);
+	if(n_peaks > 0) events = gen_events(km, norm_signals, peaks, n_peaks, n_signals, min_seg_len, max_seg_len, n_events);
 	ri_kfree(km, norm_signals); ri_kfree(km, peaks);
+
+	return events;
+}
+
+float* detect_events_with_ext_peaks(void *km,
+					 const uint32_t s_len,
+					 const float* sig,
+					 const uint32_t *ext_peaks,
+					 const uint32_t n_ext_peaks,
+					 const uint32_t min_seg_len,
+					 const uint32_t max_seg_len,
+					 double* mean_sum,
+					 double* std_dev_sum,
+					 uint32_t* n_events_sum,
+					 uint32_t* n_events)
+{
+	(*n_events) = 0;
+	if (n_ext_peaks == 0) return 0;
+
+	/* Step 1: Normalize the signal (same as detect_events) */
+	uint32_t n_signals = 0;
+	float* norm_signals = normalize_signal(km, sig, s_len, mean_sum, std_dev_sum, n_events_sum, &n_signals);
+	if (n_signals == 0) return 0;
+
+	/* Step 2: Build raw-to-normalized index map.
+	 * normalize_signal() filters out values outside [-3, 3] sigma.
+	 * We need to replay this filter to know where each raw index lands
+	 * in the normalized array.
+	 * Use the same cumulative mean/stddev that normalize_signal computed.
+	 * mean_sum, std_dev_sum, and n_events_sum were already updated. */
+	double mean = (*mean_sum) / (*n_events_sum);
+	double std_dev = sqrt((*std_dev_sum) / (*n_events_sum) - mean * mean);
+
+	/* Build the map: raw_to_norm[i] = position in normalized array, or UINT32_MAX if filtered */
+	uint32_t *raw_to_norm = (uint32_t*)ri_kmalloc(km, s_len * sizeof(uint32_t));
+	uint32_t k = 0;
+	for (uint32_t i = 0; i < s_len; ++i) {
+		float norm_val = (float)((sig[i] - mean) / std_dev);
+		if (norm_val < 3 && norm_val > -3) {
+			raw_to_norm[i] = k++;
+		} else {
+			raw_to_norm[i] = UINT32_MAX;
+		}
+	}
+
+	/* Step 3: Remap external peaks from raw to normalized space */
+	uint32_t *remapped = (uint32_t*)ri_kmalloc(km, n_ext_peaks * sizeof(uint32_t));
+	uint32_t n_valid = 0;
+	for (uint32_t i = 0; i < n_ext_peaks; ++i) {
+		if (ext_peaks[i] < s_len && raw_to_norm[ext_peaks[i]] != UINT32_MAX) {
+			remapped[n_valid++] = raw_to_norm[ext_peaks[i]];
+		}
+		/* else: peak position was filtered out or out of bounds — skip */
+	}
+	ri_kfree(km, raw_to_norm);
+
+	/* Step 4: Run gen_events on normalized signal with remapped peaks */
+	float* events = 0;
+	if (n_valid > 0) events = gen_events(km, norm_signals, remapped, n_valid, n_signals, min_seg_len, max_seg_len, n_events);
+	ri_kfree(km, norm_signals);
+	ri_kfree(km, remapped);
 
 	return events;
 }
