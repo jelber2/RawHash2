@@ -148,3 +148,14 @@ To start performing the read overlapping and assembly evaluations, enter [./eval
 ```bash
 cd ./evaluation/rawsamble
 ```
+
+## Live Streaming Evaluation (MinKNOW/Icarust)
+
+For testing RawHash2's real-time signal streaming capability via gRPC, see [../docs/LIVE.md](../docs/LIVE.md).
+
+This evaluation uses the Icarust simulator to test live signal streaming:
+- E. coli R10 reference: 60-second test with 1027 unique reads
+- Expected results: 99.51% mapped, F1=0.9976, MAPQ distribution: 79.1% at maximum
+- Comparison: File-based mapping achieves 59.46% mapped (F1=0.805) on real POD5 data
+
+The higher live-mode accuracy is expected since Icarust generates idealized signal without real sequencing noise. Real MinKNOW integration on physical hardware will produce accuracy between these two numbers.

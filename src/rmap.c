@@ -712,6 +712,13 @@ static void map_worker_for(void *_data,
 	}
 }
 
+/* Live streaming wrappers: expose static functions for rlive.cpp */
+#ifndef NGRPCRH
+void ri_map_worker_for(void *data, long i, int tid) { map_worker_for(data, i, tid); }
+ri_tbuf_t *ri_tbuf_init_live(void) { return ri_tbuf_init(); }
+void ri_tbuf_destroy_live(ri_tbuf_t *b) { ri_tbuf_destroy(b); }
+#endif
+
 ri_sig_t** ri_sig_read_frag(pipeline_mt *pl,
 							int64_t chunk_size,
 							int *n_)

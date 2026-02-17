@@ -6,6 +6,9 @@
 #include "rawhash.h"
 #include "ketopt.h"
 #include "rextdata.h"
+#ifndef NGRPCRH
+#include "rlive.h"
+#endif
 
 #define RH_VERSION "2.1"
 
@@ -87,6 +90,17 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"moves-file",			ko_required_argument, 	374 },
 	{ (char*)"min-seg-length",		ko_required_argument, 	375 },
 	{ (char*)"max-seg-length",		ko_required_argument, 	376 },
+#ifndef NGRPCRH
+	{ (char*)"live",				ko_no_argument,       	377 },
+	{ (char*)"live-host",			ko_required_argument, 	378 },
+	{ (char*)"live-port",			ko_required_argument, 	379 },
+	{ (char*)"live-first-channel",	ko_required_argument, 	380 },
+	{ (char*)"live-last-channel",	ko_required_argument, 	381 },
+	{ (char*)"live-tls",			ko_no_argument,       	382 },
+	{ (char*)"live-tls-cert",		ko_required_argument, 	383 },
+	{ (char*)"live-duration",		ko_required_argument, 	384 },
+	{ (char*)"live-debug",			ko_no_argument,       	385 },
+#endif
 	{ 0, 0, 0 }
 };
 
@@ -277,6 +291,12 @@ int main(int argc, char *argv[])
 	ri_realtime0 = ri_realtime();
 	ri_set_opt(0, &ipt, &opt);
 
+#ifndef NGRPCRH
+	int live_mode = 0;
+	ri_live_opt_t live_opt;
+	ri_live_opt_init(&live_opt);
+#endif
+
 	// test command line options and apply option -x/preset first
 	while ((c = ketopt(&o, argc, argv, 1, opt_str, long_options)) >= 0) {
 		if (c == 'x') {
@@ -434,6 +454,17 @@ int main(int argc, char *argv[])
 		else if (c == 374) fmoves = o.arg; // --moves-file
 		else if (c == 375) opt.min_segment_length = (uint32_t)atoi(o.arg); // --min-seg-length
 		else if (c == 376) opt.max_segment_length = (uint32_t)atoi(o.arg); // --max-seg-length
+#ifndef NGRPCRH
+		else if (c == 377) live_mode = 1; // --live
+		else if (c == 378) live_opt.host = o.arg; // --live-host
+		else if (c == 379) live_opt.port = atoi(o.arg); // --live-port
+		else if (c == 380) live_opt.first_channel = (uint32_t)atoi(o.arg); // --live-first-channel
+		else if (c == 381) live_opt.last_channel = (uint32_t)atoi(o.arg); // --live-last-channel
+		else if (c == 382) live_opt.use_tls = 1; // --live-tls
+		else if (c == 383) live_opt.tls_cert_path = o.arg; // --live-tls-cert
+		else if (c == 384) live_opt.duration_seconds = atoi(o.arg); // --live-duration
+		else if (c == 385) live_opt.debug = 1; // --live-debug
+#endif
 		else if (c == 'V') {puts(RH_VERSION); return 0;}
 	}
 
@@ -534,6 +565,19 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --test-frequency INT   re-estimate every INT reads [%u]\n", opt.ttest_freq);
 		fprintf(fp_help, "    --min-reads INT        min reads before first estimate [%u]\n", opt.tmin_reads);
 
+#ifndef NGRPCRH
+		fprintf(fp_help, "\n  Live Streaming (MinKNOW/Icarust):\n");
+		fprintf(fp_help, "    --live                 enable real-time gRPC streaming from MinKNOW/Icarust\n");
+		fprintf(fp_help, "    --live-host STR        gRPC server hostname [localhost]\n");
+		fprintf(fp_help, "    --live-port INT        gRPC server port [10001]\n");
+		fprintf(fp_help, "    --live-first-channel INT  first channel to monitor, 1-indexed [1]\n");
+		fprintf(fp_help, "    --live-last-channel INT   last channel to monitor, 1-indexed [512]\n");
+		fprintf(fp_help, "    --live-tls             use TLS encryption (for real MinKNOW)\n");
+		fprintf(fp_help, "    --live-tls-cert FILE   path to CA certificate for TLS\n");
+		fprintf(fp_help, "    --live-duration INT    run for INT seconds, 0 = until experiment ends [0]\n");
+		fprintf(fp_help, "    --live-debug           print chunk metadata to stderr (no mapping)\n");
+#endif
+
 		fprintf(fp_help, "\n  Input/Output:\n");
 		fprintf(fp_help, "    -o FILE      output file [stdout]\n");
 		fprintf(fp_help, "    -t INT       number of threads [%d]\n", n_threads);
@@ -583,7 +627,11 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	if (!idx_rdr->is_idx && fnw == 0 && argc - o.ind < 2 && !(ipt.flag&RI_I_OUT_QUANTIZE)) {
+	if (!idx_rdr->is_idx && fnw == 0 && argc - o.ind < 2 && !(ipt.flag&RI_I_OUT_QUANTIZE)
+#ifndef NGRPCRH
+		&& !live_mode
+#endif
+	) {
 		fprintf(stderr, "[ERROR] missing input: please specify a query FAST5/SLOW5/POD5 file(s) to map or option -d to store the index in a file before running the mapping\n");
 		ri_idx_reader_close(idx_rdr);
 		return 1;
@@ -640,23 +688,24 @@ int main(int argc, char *argv[])
 		if (ri_verbose >= 3)
 			fprintf(stderr, "[M::%s::%.3f*%.2f] loaded/built the index for %d target sequence(s)\n",
 					__func__, ri_realtime() - ri_realtime0, ri_cputime() / (ri_realtime() - ri_realtime0), ri->n_seq);
-		if (argc != o.ind + 1) ri_mapopt_update(&opt, ri);
+		if (argc != o.ind + 1
+#ifndef NGRPCRH
+			|| live_mode
+#endif
+		) ri_mapopt_update(&opt, ri);
 		if (ri_verbose >= 3) ri_idx_stat(ri);
+#ifndef NGRPCRH
+		if (live_mode) {
+			ret = ri_map_live(ri, &opt, &live_opt, n_threads);
+		} else
+#endif
 		if (argc - (o.ind + 1) == 0) {
 			fprintf(stderr, "[INFO] No files to query index on. Only the index is constructed.\n");
 			ri_idx_destroy(ri);
 			continue; // no query files, just creating the index
-		}
-		ret = 0;
-		// if (!(opt.flag & MM_F_FRAG_MODE)) { //TODO: enable frag mode directly from options
-		// for (i = o.ind + 1; i < argc; ++i) {
-		// 	ret = ri_map_file(ri, argv[i], &opt, n_threads, io_n_threads);
-		// 	if (ret < 0) break;
-		// }
-		// }
-		// else { //TODO: enable frag mode directly from options
+		} else {
 			ret = ri_map_file_frag(ri, argc - (o.ind + 1), (const char**)&argv[o.ind + 1], &opt, n_threads, io_n_threads);
-		// }
+		}
 		ri_idx_destroy(ri);
 		if (ret < 0) {
 			fprintf(stderr, "ERROR: failed to map the query file\n");

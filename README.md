@@ -26,6 +26,8 @@ RawHash performs real-time mapping of nanopore raw signals. When the prefix of r
 
 # Recent changes
 
+* We have integrated **MinKNOW gRPC real-time signal streaming support (BETA)** for live selective sequencing workflows. This feature enables RawHash2 to receive signals directly from MinKNOW or the Icarust simulator and provide real-time mapping decisions. Currently tested and validated with the Icarust simulator. For detailed setup, installation, and testing instructions, see [docs/LIVE.md](docs/LIVE.md).
+
 * We have integrated a new overlapping mechanism along with its presets, for our new mechanism, called **Rawsamble**. Please see below the corresponding section to run Rawsamble (i.e., overlapping) with RawHash.
 
 * We came up with a better and more accurate quantization mechanism in RawHash2. The new quantization mechanism dynamically arranges the bucket sizes that each signal value is quantized depending on the normalized distribution of the signal values. **This provides significant improvements in both accuracy and performance.**
@@ -183,6 +185,42 @@ make DEBUG=1 NOHDF5=0
 ```bash
 make subset
 ```
+
+## gRPC Live Streaming Support (MinKNOW/Icarust) — BETA
+
+RawHash2 now supports **real-time signal streaming** from Oxford Nanopore's MinKNOW software or the Icarust simulator. This enables live selective sequencing workflows where mapping decisions are made in real-time.
+
+**Status:** Beta version, tested with Icarust simulator. Real MinKNOW integration ready but not yet tested on physical hardware.
+
+**Building with gRPC support:**
+
+```bash
+# CMake (Recommended)
+make cmake CMAKE_OPTS="-DENABLE_GRPC=ON"
+
+# With additional format support
+make cmake CMAKE_OPTS="-DENABLE_GRPC=ON -DENABLE_HDF5=ON -DENABLE_SLOW5=ON"
+```
+
+**Prerequisites for gRPC:**
+
+| Platform | Requirement |
+|----------|-------------|
+| macOS | `brew install grpc` |
+| Linux | `conda create -n rawhash2-live grpcio grpcio-tools libgrpc protobuf cmake` |
+
+**Quick test (requires Icarust simulator):**
+
+```bash
+# Terminal 1: Start Icarust
+export HDF5_DIR=$(brew --prefix hdf5@1.10)  # macOS
+./Icarust/target/release/icarust docs/live/example_config.toml
+
+# Terminal 2: Run RawHash2 live
+bin/rawhash2 --live --live-port 10001 -t 4 ref.idx > live_output.paf
+```
+
+For comprehensive setup, testing, and troubleshooting instructions, see **[docs/LIVE.md](docs/LIVE.md)**.
 
 # Usage
 

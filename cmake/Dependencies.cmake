@@ -79,3 +79,8 @@ endif()
 if(ENABLE_POD5)
     include(cmake/FetchPOD5.cmake)
 endif()
+
+# --- gRPC (for MinKNOW live streaming) ---
+if(ENABLE_GRPC)
+    include(cmake/FetchGRPC.cmake)
+endif()

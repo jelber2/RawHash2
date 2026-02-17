@@ -24,11 +24,12 @@ set(RAWHASH2_SOURCES
 
 add_executable(rawhash2 ${RAWHASH2_SOURCES})
 
-# When POD5 or HDF5 is enabled, compile all sources as C++.
+# When POD5, HDF5, or gRPC is enabled, compile all sources as C++.
 # HDF5: rsig.c contains C++ code in #ifndef NHDF5RH blocks.
 # POD5: pre-built static libraries (libpod5_format.a, libarrow.a) require the C++ linker.
-# When neither is enabled, all sources compile as pure C.
-if(ENABLE_POD5 OR ENABLE_HDF5)
+# gRPC: rlive.cpp is C++ and links against gRPC++ / protobuf C++ libraries.
+# When none of these is enabled, all sources compile as pure C.
+if(ENABLE_POD5 OR ENABLE_HDF5 OR ENABLE_GRPC)
     set_source_files_properties(${RAWHASH2_SOURCES} PROPERTIES LANGUAGE CXX)
 endif()
 
@@ -88,6 +89,29 @@ else()
     add_dependencies(rawhash2 pod5_external)
 endif()
 
+# --- Conditional feature: gRPC (MinKNOW live streaming) ---
+if(NOT ENABLE_GRPC)
+    target_compile_definitions(rawhash2 PRIVATE NGRPCRH=1)
+else()
+    # Generate C++ stubs from MinKNOW proto files
+    generate_grpc_cpp(
+        PROTO_FILES
+            ${PROJECT_SOURCE_DIR}/proto/minknow_api/data.proto
+            ${PROJECT_SOURCE_DIR}/proto/minknow_api/device.proto
+            ${PROJECT_SOURCE_DIR}/proto/minknow_api/rpc_options.proto
+        PROTO_PATH ${PROJECT_SOURCE_DIR}/proto
+        OUTPUT_DIR ${CMAKE_BINARY_DIR}/generated
+    )
+    target_sources(rawhash2 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/rlive.cpp
+        ${GRPC_GENERATED_SOURCES}
+    )
+    target_include_directories(rawhash2 PRIVATE
+        ${CMAKE_BINARY_DIR}/generated
+    )
+    target_link_libraries(rawhash2 PRIVATE gRPC::grpc++ protobuf::libprotobuf)
+endif()
+
 # --- zstd linking ---
 # zstd is needed by both POD5 (directly) and SLOW5 (slow5lib built with zstd=1).
 # Link it if either feature is enabled.
@@ -122,7 +146,7 @@ target_link_libraries(rawhash2 PRIVATE
 #     (harmless stub on GCC 9+)
 #   - std::basic_stringstream and other C++ symbols need -lstdc++ explicitly
 #     at the end to ensure correct link ordering with static archives
-if(ENABLE_POD5 OR ENABLE_HDF5)
+if(ENABLE_POD5 OR ENABLE_HDF5 OR ENABLE_GRPC)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(rawhash2 PRIVATE stdc++fs stdc++)
     endif()

@@ -93,6 +93,17 @@ int ri_map_file(const ri_idx_t *idx, const char *fn, const ri_mapopt_t *opt, int
  */
 int ri_map_file_frag(const ri_idx_t *idx, int n_segs, const char **fn, const ri_mapopt_t *opt, int n_threads, int io_n_threads);
 
+/**
+ * Live streaming support: expose internal worker functions for the gRPC
+ * live pipeline (rlive.cpp). Guarded by NGRPCRH to avoid unused-function
+ * warnings when gRPC is disabled.
+ */
+#ifndef NGRPCRH
+void ri_map_worker_for(void *data, long i, int tid);
+ri_tbuf_t *ri_tbuf_init_live(void);
+void ri_tbuf_destroy_live(ri_tbuf_t *b);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

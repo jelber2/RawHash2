@@ -218,6 +218,9 @@ else
     ALL_FLAGS += -DNSLOW5RH=1
 endif
 
+# gRPC is not supported in standalone builds (requires CMake).
+ALL_FLAGS += -DNGRPCRH=1
+
 # =====================================================================
 # zstd configuration (needed by both POD5 and SLOW5)
 # =====================================================================

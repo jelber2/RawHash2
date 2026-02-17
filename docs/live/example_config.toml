@@ -1,0 +1,43 @@
+# Example Icarust Configuration for RawHash2 Live Mapping Testing
+#
+# This config generates E. coli signal (R10 pore model) for 60 seconds
+# which can be consumed by RawHash2 in real-time via gRPC.
+#
+# Usage:
+#   export HDF5_DIR=$(brew --prefix hdf5@1.10)  # macOS only
+#   ./Icarust/target/release/icarust example_config.toml
+
+output_path = "/tmp/icarust_test/"
+target_yield = 10000000
+global_mean_read_length = 8000
+pore_type = "R10"
+nucleotide_type = "DNA"
+random_seed = 42
+
+[parameters]
+sample_name = "test_ecoli"
+experiment_name = "rawhash2_live_test"
+flowcell_name = "FAQ1234"
+experiment_duration_set = 60
+
+# Sample rate: 4 kHz is standard for current pore models
+sample_rate = 4000
+
+# Sequencing speed in bases per second
+# Realistic range: 200-500 bases/sec
+sequencing_speed = 400
+
+device_id = "SimDevice"
+position = "SimPosition"
+
+# Single sample: E. coli reference
+[[sample]]
+name = "E_coli_CFT073"
+
+# Path to FASTA reference
+# This file is included in RawHash2: test/data/d9_ecoli_r1041/ref.fa
+# Adjust path if running from a different directory
+input_genome = "./test/data/d9_ecoli_r1041/ref.fa"
+
+mean_read_length = 8000
+weight = 1
