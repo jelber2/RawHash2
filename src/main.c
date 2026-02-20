@@ -100,6 +100,8 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"live-tls-cert",		ko_required_argument, 	383 },
 	{ (char*)"live-duration",		ko_required_argument, 	384 },
 	{ (char*)"live-debug",			ko_no_argument,       	385 },
+	{ (char*)"live-no-sig-filter",	ko_no_argument,       	386 },
+	{ (char*)"live-uncalibrated",	ko_no_argument,       	387 },
 #endif
 	{ 0, 0, 0 }
 };
@@ -464,6 +466,8 @@ int main(int argc, char *argv[])
 		else if (c == 383) live_opt.tls_cert_path = o.arg; // --live-tls-cert
 		else if (c == 384) live_opt.duration_seconds = atoi(o.arg); // --live-duration
 		else if (c == 385) live_opt.debug = 1; // --live-debug
+		else if (c == 386) live_opt.no_sig_filter = 1; // --live-no-sig-filter
+		else if (c == 387) live_opt.uncalibrated = 1; // --live-uncalibrated
 #endif
 		else if (c == 'V') {puts(RH_VERSION); return 0;}
 	}
@@ -576,6 +580,8 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --live-tls-cert FILE   path to CA certificate for TLS\n");
 		fprintf(fp_help, "    --live-duration INT    run for INT seconds, 0 = until experiment ends [0]\n");
 		fprintf(fp_help, "    --live-debug           print chunk metadata to stderr (no mapping)\n");
+		fprintf(fp_help, "    --live-no-sig-filter   disable 30-200 pA signal filter in streaming\n");
+		fprintf(fp_help, "    --live-uncalibrated    request uncalibrated data, apply per-channel cal\n");
 #endif
 
 		fprintf(fp_help, "\n  Input/Output:\n");

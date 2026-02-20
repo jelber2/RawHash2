@@ -94,6 +94,28 @@ int ri_map_file(const ri_idx_t *idx, const char *fn, const ri_mapopt_t *opt, int
 int ri_map_file_frag(const ri_idx_t *idx, int n_segs, const char **fn, const ri_mapopt_t *opt, int n_threads, int io_n_threads);
 
 /**
+ * Incremental chunk-processing API.
+ * Used by both the batch pipeline (map_worker_for) and live streaming (rlive.cpp).
+ */
+
+/** Process one signal chunk and check for mapping. Returns 1 if mapping found. */
+int ri_map_one_chunk(const ri_idx_t *ri, const ri_mapopt_t *opt,
+                     const float *chunk_sig, uint32_t chunk_len,
+                     ri_reg1_t *reg, ri_tbuf_t *b,
+                     double *mean_sum, double *std_dev_sum,
+                     uint32_t *n_events_sum, const char *qname);
+
+/** Finalize mapping results: generate PAF tags, handle CIGAR re-alignment. */
+void ri_map_finalize(const ri_idx_t *ri, const ri_mapopt_t *opt,
+                     ri_reg1_t *reg, ri_tbuf_t *b,
+                     uint32_t read_id, const char *read_name,
+                     uint32_t qlen, uint32_t c_count, uint32_t l_chunk,
+                     double mapping_time);
+
+/** Clean up per-read mapping state (prev_anchors, creg, events, memory pool). */
+void ri_map_cleanup(ri_reg1_t *reg, ri_tbuf_t *b);
+
+/**
  * Live streaming support: expose internal worker functions for the gRPC
  * live pipeline (rlive.cpp). Guarded by NGRPCRH to avoid unused-function
  * warnings when gRPC is disabled.

@@ -3,9 +3,13 @@
 # This config generates E. coli signal (R10 pore model) for 60 seconds
 # which can be consumed by RawHash2 in real-time via gRPC.
 #
-# Usage:
-#   export HDF5_DIR=$(brew --prefix hdf5@1.10)  # macOS only
-#   ./Icarust/target/release/icarust example_config.toml
+# Usage (run from the Icarust repo directory):
+#   cd /path/to/Icarust
+#   ./target/release/icarust -s /path/to/example_config.toml -c /path/to/config.ini
+#
+# Note: Icarust must run from its own directory to find static/ kmer models.
+# Also requires a config.ini for TLS certs and port settings.
+# The test_live.sh script handles all of this automatically.
 
 output_path = "/tmp/icarust_test/"
 target_yield = 10000000

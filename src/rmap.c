@@ -458,6 +458,249 @@ void ri_map_frag(const ri_idx_t *ri,
 	reg->offset += n_events;
 }
 
+/* ========================================================================
+ * Extracted chunk-processing functions for both batch and live streaming.
+ * ri_map_one_chunk(): process one signal chunk and check for mapping.
+ * ri_map_finalize(): generate PAF tags and fill output maps.
+ * ri_map_cleanup(): free per-read mapping state.
+ * ======================================================================== */
+
+/**
+ * Process one signal chunk and check for mapping.
+ *
+ * This is the loop body extracted from map_worker_for(). It calls ri_map_frag()
+ * with the chunk signal, then applies the mapping decision logic (single-chain
+ * mapq check, weighted scoring).
+ *
+ * @return 1 if mapping found, 0 otherwise
+ */
+int ri_map_one_chunk(const ri_idx_t *ri, const ri_mapopt_t *opt,
+                     const float *chunk_sig, uint32_t chunk_len,
+                     ri_reg1_t *reg, ri_tbuf_t *b,
+                     double *mean_sum, double *std_dev_sum,
+                     uint32_t *n_events_sum, const char *qname)
+{
+	if(reg->creg){free(reg->creg); reg->creg = NULL; reg->n_cregs = 0;}
+
+	ri_map_frag(ri, (const uint32_t)chunk_len, chunk_sig, reg, b, opt, qname,
+	            mean_sum, std_dev_sum, n_events_sum, 0);
+
+	int n_chains = (opt->flag&RI_M_ALL_CHAINS || reg->n_cregs < 1)?reg->n_cregs:1;
+
+	if (reg->n_cregs == 1 && ((reg->creg[0].mapq >= opt->min_mapq) || (opt->flag&RI_M_DTW_EVALUATE_CHAINS && reg->creg[0].alignment_score >= opt->dtw_min_score))) {
+		reg->n_maps++;
+		reg->maps = (ri_map_t*)ri_krealloc(0, reg->maps, reg->n_maps*sizeof(ri_map_t));
+		reg->maps[reg->n_maps-1].c_id = 0;
+		return 1;
+	}
+
+	//TODO make n_cregs a parameter of best n mappings
+	float meanC = 0, meanQ = 0;
+	for (int32_t c_ind = 0; c_ind < reg->n_cregs; ++c_ind){
+		meanC += reg->creg[c_ind].score;
+		meanQ += reg->creg[c_ind].mapq;
+	}
+	if(reg->n_cregs > 0){meanC /= reg->n_cregs; meanQ /= reg->n_cregs;}
+
+	for(int ic = 0; ic < n_chains; ++ic){
+		float r_bestma = 0.0f, r_bestmq = 0.0f, r_bestmc = 0.0f, r_bestq = 0.0f;
+		float bestQ = 0.0f, bestC = 0.0f, bestA = 0.0f, weighted_sum = 0.0f;
+		bestQ = reg->creg[ic].mapq;
+		bestC = reg->creg[ic].score;
+
+		if(!(opt->flag&RI_M_ALL_CHAINS)){
+			if(opt->flag&RI_M_DTW_EVALUATE_CHAINS){
+				bestA = reg->creg[ic].alignment_score;
+				if(n_chains == 1){ //no all-vs-all overlap mod
+					uint32_t best_ind = 0;
+					for(int i = 1; i < reg->n_cregs; ++i){
+						if(reg->creg[i].alignment_score > bestA){
+							bestA = reg->creg[i].alignment_score;
+							best_ind = i;
+						}
+					}
+					ic = best_ind;
+					bestQ = reg->creg[ic].mapq;
+					bestC = reg->creg[ic].score;
+				}
+				if(bestA >= opt->dtw_min_score){
+					r_bestma = (bestA > 0)?(bestA/50.0f):0.0f; if(r_bestma < 0) r_bestma = 0.0f;
+					r_bestmq = (bestQ > 0)?(1.0f - (meanQ/bestQ)):0.0f; if(r_bestmq < 0) r_bestmq = 0.0f;
+					r_bestmc = (bestC > 0)?(1.0f - (meanC/bestC)):0.0f; if(r_bestmc < 0) r_bestmc = 0.0f;
+
+					weighted_sum = opt->w_bestma*r_bestma + opt->w_bestmq*r_bestmq + opt->w_bestmc*r_bestmc;
+				}
+			}else{
+				r_bestq = (bestQ > 0)?(bestQ/30.0f):0.0f; if(r_bestq > 1) r_bestq = 1.0f;
+				r_bestmq = (bestQ > 0)?(1.0f - (meanQ/bestQ)):0.0f; if(r_bestmq < 0) r_bestmq = 0.0f;
+				r_bestmc = (bestC > 0)?(1.0f - (meanC/bestC)):0.0f; if(r_bestmc < 0) r_bestmc = 0.0f;
+
+				weighted_sum = opt->w_bestq*r_bestq + opt->w_bestmq*r_bestmq + opt->w_bestmc*r_bestmc;
+			}
+		}
+
+		// Compare the weighted sum against a threshold to make the decision
+		if (weighted_sum >= opt->w_threshold || (opt->flag&RI_M_ALL_CHAINS && reg->creg[ic].score >= opt->min_chaining_score2)) {
+			reg->n_maps++;
+			reg->maps = (ri_map_t*)ri_krealloc(0, reg->maps, reg->n_maps*sizeof(ri_map_t));
+			reg->maps[reg->n_maps-1].c_id = ic;
+		}
+	}
+
+	return (reg->n_maps > 0) ? 1 : 0;
+}
+
+/**
+ * Finalize mapping results and generate PAF tags.
+ *
+ * Called after the chunk loop completes (either mapping found or max chunks reached).
+ * Applies the fallback mapq check, generates PAF tags, and handles CIGAR re-alignment.
+ *
+ * @param ri            reference index
+ * @param opt           mapping options
+ * @param reg           per-read registration (populated by ri_map_one_chunk)
+ * @param b             thread buffer
+ * @param read_id       numeric read identifier
+ * @param read_name     read name string
+ * @param qlen          total signal length (samples)
+ * @param c_count       0-indexed last chunk index (chunk_count - 1)
+ * @param l_chunk       chunk size in samples
+ * @param mapping_time  total mapping time in seconds
+ */
+void ri_map_finalize(const ri_idx_t *ri, const ri_mapopt_t *opt,
+                     ri_reg1_t *reg, ri_tbuf_t *b,
+                     uint32_t read_id, const char *read_name,
+                     uint32_t qlen, uint32_t c_count, uint32_t l_chunk,
+                     double mapping_time)
+{
+	float read_position_scale = (reg->offset == 0)?0.0f:(opt->sample_per_base == 0)?0.0f:((float)(c_count+1)*l_chunk/reg->offset)/opt->sample_per_base;
+	mm_reg1_t* chains = reg->creg;
+
+	if(!chains) {reg->n_cregs = 0;}
+	float mean_chain_score = 0;
+
+	if(reg->n_maps == 0 && reg->creg && reg->creg[0].mapq > opt->min_mapq){
+		reg->n_maps++;
+		reg->maps = (ri_map_t*)ri_krealloc(0, reg->maps, reg->n_maps*sizeof(ri_map_t));
+		reg->maps[reg->n_maps-1].c_id = 0;
+	}
+
+	/* Re-align mapped chains with traceback when CIGAR output is requested */
+	dtw_result *cigar_results = NULL;
+	if ((opt->flag & RI_M_DTW_OUTPUT_CIGAR) && (opt->flag & RI_M_DTW_EVALUATE_CHAINS)
+	    && reg->n_maps > 0 && chains && reg->events) {
+		cigar_results = (dtw_result *)calloc(reg->n_maps, sizeof(dtw_result));
+		for (uint32_t m = 0; m < reg->n_maps; m++) {
+			uint32_t c_id = reg->maps[m].c_id;
+			align_chain(&chains[c_id], NULL, ri,
+			            reg->events, reg->offset, opt,
+			            true, -1e10f, &cigar_results[m]);
+		}
+	}
+
+	if (reg->n_maps == 0){
+		reg->maps = (ri_map_t*)ri_kcalloc(0, 1, sizeof(ri_map_t));
+		char *tags = (char *)malloc(1024 * sizeof(char));
+		tags[0] = '\0';
+		char buffer[256];
+
+		sprintf(buffer, "mt:f:%.6f", mapping_time * 1000); strcat(tags, buffer);
+		sprintf(buffer, "\tci:i:%d", c_count + 1); strcat(tags, buffer);
+		sprintf(buffer, "\tsl:i:%d", qlen); strcat(tags, buffer);
+		if (reg->n_cregs >= 1) {
+			sprintf(buffer, "\tcm:i:%d", chains[0].cnt); strcat(tags, buffer);
+			sprintf(buffer, "\tnc:i:%d", reg->n_cregs); strcat(tags, buffer);
+			sprintf(buffer, "\ts1:i:%d", chains[0].score); strcat(tags, buffer);
+			sprintf(buffer, "\tsm:f:%.2f", mean_chain_score); strcat(tags, buffer);
+		}else {
+			sprintf(buffer, "\tcm:i:0"); strcat(tags, buffer);
+			sprintf(buffer, "\tnc:i:0"); strcat(tags, buffer);
+			sprintf(buffer, "\ts1:i:0"); strcat(tags, buffer);
+			sprintf(buffer, "\tsm:f:0"); strcat(tags, buffer);
+		}
+
+		reg->read_id = read_id;
+		reg->read_name = read_name;
+		reg->maps[0].read_length = (ri->flag&RI_I_SIG_TARGET)?reg->offset:(uint32_t)(read_position_scale * reg->offset);
+		reg->maps[0].c_id = 0;
+		reg->maps[0].ref_id = 0;
+		reg->maps[0].read_start_position = 0;
+		reg->maps[0].read_end_position = 0;
+		reg->maps[0].fragment_start_position = 0;
+		reg->maps[0].fragment_length = 0;
+		reg->maps[0].mapq = 0;
+		reg->maps[0].rev = 0;
+		reg->maps[0].mapped = 0;
+		reg->maps[0].tags = tags;
+	}else{
+		for(uint32_t m = 0; m < reg->n_maps; ++m){
+			char *tags = (char *)malloc(1024 * sizeof(char));
+			uint32_t c_id = reg->maps[m].c_id;
+			tags[0] = '\0';
+			char buffer[256];
+			sprintf(buffer, "mt:f:%.6f", mapping_time * 1000); strcat(tags, buffer);
+			sprintf(buffer, "\tci:i:%d", c_count + 1); strcat(tags, buffer);
+			sprintf(buffer, "\tsl:i:%d", qlen); strcat(tags, buffer);
+			sprintf(buffer, "\tcm:i:%d", chains[c_id].cnt); strcat(tags, buffer);
+			sprintf(buffer, "\tnc:i:%d", reg->n_cregs); strcat(tags, buffer);
+			sprintf(buffer, "\ts1:i:%d", chains[c_id].score); strcat(tags, buffer);
+			sprintf(buffer, "\tsm:f:%.2f", mean_chain_score); strcat(tags, buffer);
+
+			/* Append DTW alignment tags when CIGAR output is enabled */
+			if (cigar_results && cigar_results[m].alignment) {
+				sprintf(buffer, "\talns:f:%.6f", chains[c_id].alignment_score); strcat(tags, buffer);
+				char *aln_str = dtwresult_to_string(&cigar_results[m]);
+				size_t cur_len = strlen(tags);
+				size_t aln_len = strlen(aln_str);
+				tags = (char *)realloc(tags, cur_len + aln_len + 16);
+				strcat(tags, "\taln:s:");
+				strcat(tags, aln_str);
+				free(aln_str);
+			}
+
+			reg->read_id = read_id;
+			reg->read_name = read_name;
+			reg->maps[m].read_length = (ri->flag&RI_I_SIG_TARGET)?(reg->offset):(uint32_t)(read_position_scale*chains[c_id].qe);
+			reg->maps[m].ref_id = chains[c_id].rid;
+			reg->maps[m].read_start_position = (ri->flag&RI_I_SIG_TARGET)?chains[c_id].qs:(uint32_t)(read_position_scale*chains[c_id].qs);
+			reg->maps[m].read_end_position = (ri->flag&RI_I_SIG_TARGET)?chains[c_id].qe:(uint32_t)(read_position_scale*chains[c_id].qe);
+			if(ri->flag&RI_I_SIG_TARGET) reg->maps[m].fragment_start_position = chains[c_id].rev?(uint32_t)(ri->sig[chains[c_id].rid].l_sig+1-chains[c_id].re):chains[c_id].rs;
+			else reg->maps[m].fragment_start_position = chains[c_id].rev?(uint32_t)(ri->seq[chains[c_id].rid].len+1-chains[c_id].re):chains[c_id].rs;
+			reg->maps[m].fragment_length = (uint32_t)(chains[c_id].re - chains[c_id].rs + 1);
+			reg->maps[m].mapq = chains[c_id].mapq;
+			reg->maps[m].rev = (chains[c_id].rev == 1)?1:0;
+			reg->maps[m].mapped = 1;
+			reg->maps[m].tags = tags;
+		}
+	}
+
+	/* Free cigar alignment results */
+	if (cigar_results) {
+		for (uint32_t m = 0; m < reg->n_maps; m++) {
+			free(cigar_results[m].alignment);
+		}
+		free(cigar_results);
+	}
+}
+
+/**
+ * Clean up per-read mapping state.
+ * Call after finalization and PAF output, or when a read is abandoned.
+ */
+void ri_map_cleanup(ri_reg1_t *reg, ri_tbuf_t *b)
+{
+	if(reg->prev_anchors) {ri_kfree(b->km, reg->prev_anchors); reg->prev_anchors = NULL; reg->n_prev_anchors = 0;}
+	if(reg->creg){free(reg->creg); reg->creg = NULL; reg->n_cregs = 0;}
+	if(reg->events){ri_kfree(b->km, reg->events); reg->events = NULL; reg->offset = 0;}
+
+	if (b->km) {
+		ri_km_stat_t kmst;
+		ri_km_stat(b->km, &kmst);
+		ri_km_destroy(b->km);
+		b->km = ri_km_init();
+	}
+}
+
 static void map_worker_for(void *_data,
 						   long i,
 						   int tid) // kt_for() callback
@@ -497,88 +740,12 @@ static void map_worker_for(void *_data,
 		s_qe = s_qs + l_chunk;
 		if(s_qe > qlen) s_qe = qlen;
 
-		if(reg0->creg){free(reg0->creg); reg0->creg = NULL; reg0->n_cregs = 0;}
-
-		ri_map_frag(s->p->ri, (const uint32_t)s_qe-s_qs, (const float*)&(sig->sig[s_qs]), reg0, b, opt, sig->name, &mean_sum, &std_dev_sum, &n_events_sum, 0);
-
-		int n_chains = (opt->flag&RI_M_ALL_CHAINS || reg0->n_cregs < 1)?reg0->n_cregs:1;
-
-		if (reg0->n_cregs == 1 && ((reg0->creg[0].mapq >= opt->min_mapq) || (opt->flag&RI_M_DTW_EVALUATE_CHAINS && reg0->creg[0].alignment_score >= opt->dtw_min_score))) {
-			reg0->n_maps++;
-			reg0->maps = (ri_map_t*)ri_krealloc(0, reg0->maps, reg0->n_maps*sizeof(ri_map_t));
-			reg0->maps[reg0->n_maps-1].c_id = 0;
+		if (ri_map_one_chunk(s->p->ri, opt,
+		                     (const float*)&(sig->sig[s_qs]), (uint32_t)(s_qe - s_qs),
+		                     reg0, b, &mean_sum, &std_dev_sum, &n_events_sum,
+		                     sig->name)) {
 			break;
 		}
-
-		//TODO make n_cregs a parameter of best n mappings
-		float meanC = 0, meanQ = 0;
-		// if(opt->flag&RI_M_DTW_EVALUATE_CHAINS){
-		// 	uint32_t chain_cnt = 0;
-		// 	for (uint32_t c_ind = 0; c_ind < reg0->n_cregs; ++c_ind){
-		// 		if(reg0->creg[c_ind].alignment_score < opt->dtw_min_score) continue;
-		// 		chain_cnt++;
-		// 		meanC += reg0->creg[c_ind].score;
-		// 		meanQ += reg0->creg[c_ind].mapq;
-		// 		// meanA += reg0->creg[c_ind].alignment_score;
-		// 	}
-		// 	if(chain_cnt){meanC /= chain_cnt; meanQ /= chain_cnt;}
-		// }
-		// else{
-		for (int32_t c_ind = 0; c_ind < reg0->n_cregs; ++c_ind){
-			meanC += reg0->creg[c_ind].score;
-			meanQ += reg0->creg[c_ind].mapq;
-		}
-		if(reg0->n_cregs > 0){meanC /= reg0->n_cregs; meanQ /= reg0->n_cregs;}
-		// }
-		
-		for(int ic = 0; ic < n_chains; ++ic){
-			float r_bestma = 0.0f, r_bestmq = 0.0f, r_bestmc = 0.0f, r_bestq = 0.0f;
-			float bestQ = 0.0f, bestC = 0.0f, bestA = 0.0f, weighted_sum = 0.0f;
-			bestQ = reg0->creg[ic].mapq;
-			bestC = reg0->creg[ic].score;
-
-			if(!(opt->flag&RI_M_ALL_CHAINS)){
-				if(opt->flag&RI_M_DTW_EVALUATE_CHAINS){
-					bestA = reg0->creg[ic].alignment_score;
-					if(n_chains == 1){ //no all-vs-all overlap mod
-						uint32_t best_ind = 0;
-						for(int i = 1; i < reg0->n_cregs; ++i){
-							if(reg0->creg[i].alignment_score > bestA){
-								bestA = reg0->creg[i].alignment_score;
-								best_ind = i;
-							}
-						}
-						ic = best_ind;
-						bestQ = reg0->creg[ic].mapq;
-						bestC = reg0->creg[ic].score;
-					}
-					if(bestA >= opt->dtw_min_score){
-						// r_bestma = (bestA > 0)?(1.0f - (meanA/bestA)):0.0f; if(r_bestma < 0) r_bestma = 0.0f;
-						r_bestma = (bestA > 0)?(bestA/50.0f):0.0f; if(r_bestma < 0) r_bestma = 0.0f;
-						r_bestmq = (bestQ > 0)?(1.0f - (meanQ/bestQ)):0.0f; if(r_bestmq < 0) r_bestmq = 0.0f;
-						r_bestmc = (bestC > 0)?(1.0f - (meanC/bestC)):0.0f; if(r_bestmc < 0) r_bestmc = 0.0f;
-
-						weighted_sum = opt->w_bestma*r_bestma + opt->w_bestmq*r_bestmq + opt->w_bestmc*r_bestmc;
-					}
-				}else{
-					r_bestq = (bestQ > 0)?(bestQ/30.0f):0.0f; if(r_bestq > 1) r_bestq = 1.0f;
-					r_bestmq = (bestQ > 0)?(1.0f - (meanQ/bestQ)):0.0f; if(r_bestmq < 0) r_bestmq = 0.0f;
-					r_bestmc = (bestC > 0)?(1.0f - (meanC/bestC)):0.0f; if(r_bestmc < 0) r_bestmc = 0.0f;
-
-					weighted_sum = opt->w_bestq*r_bestq + opt->w_bestmq*r_bestmq + opt->w_bestmc*r_bestmc;
-				}
-			}
-			
-			// Compare the weighted sum against a threshold to make the decision
-			if (weighted_sum >= opt->w_threshold || (opt->flag&RI_M_ALL_CHAINS && reg0->creg[ic].score >= opt->min_chaining_score2)) {
-				reg0->n_maps++;
-				reg0->maps = (ri_map_t*)ri_krealloc(0, reg0->maps, reg0->n_maps*sizeof(ri_map_t));
-				reg0->maps[reg0->n_maps-1].c_id = ic;
-				// fprintf(stderr, "Aligned ic: %d\n", ic);
-			}
-		}
-
-		if(reg0->n_maps > 0) break;
 	} double mapping_time = ri_realtime() - t;
 
 	#ifdef PROFILERH
@@ -587,129 +754,11 @@ static void map_worker_for(void *_data,
 
 	if (c_count > 0 && (s_qs >= qlen || c_count == max_chunk)) --c_count;
 
-	float read_position_scale = (reg0->offset == 0)?0.0f:(opt->sample_per_base == 0)?0.0f:((float)(c_count+1)*l_chunk/reg0->offset)/opt->sample_per_base;
-	mm_reg1_t* chains = reg0->creg;
+	ri_map_finalize(s->p->ri, opt, reg0, b,
+	                sig->rid, sig->name, qlen,
+	                c_count, l_chunk, mapping_time);
 
-	if(!chains) {reg0->n_cregs = 0;}
-	float mean_chain_score = 0;
-
-	if(reg0->n_maps == 0 && reg0->creg && reg0->creg[0].mapq > opt->min_mapq){
-		reg0->n_maps++;
-		reg0->maps = (ri_map_t*)ri_krealloc(0, reg0->maps, reg0->n_maps*sizeof(ri_map_t));
-		reg0->maps[reg0->n_maps-1].c_id = 0;
-	}
-
-	/* Re-align mapped chains with traceback when CIGAR output is requested */
-	dtw_result *cigar_results = NULL;
-	if ((opt->flag & RI_M_DTW_OUTPUT_CIGAR) && (opt->flag & RI_M_DTW_EVALUATE_CHAINS)
-	    && reg0->n_maps > 0 && chains && reg0->events) {
-		cigar_results = (dtw_result *)calloc(reg0->n_maps, sizeof(dtw_result));
-		for (uint32_t m = 0; m < reg0->n_maps; m++) {
-			uint32_t c_id = reg0->maps[m].c_id;
-			align_chain(&chains[c_id], NULL, s->p->ri,
-			            reg0->events, reg0->offset, opt,
-			            true, -1e10f, &cigar_results[m]);
-		}
-	}
-
-	if (reg0->n_maps == 0){
-		reg0->maps = (ri_map_t*)ri_kcalloc(0, 1, sizeof(ri_map_t));
-		char *tags = (char *)malloc(1024 * sizeof(char));
-		tags[0] = '\0'; // make it an empty string
-		char buffer[256]; // temporary buffer
-
-		sprintf(buffer, "mt:f:%.6f", mapping_time * 1000); strcat(tags, buffer);
-		sprintf(buffer, "\tci:i:%d", c_count + 1); strcat(tags, buffer);
-		sprintf(buffer, "\tsl:i:%d", qlen); strcat(tags, buffer);
-		if (reg0->n_cregs >= 1) {
-			sprintf(buffer, "\tcm:i:%d", chains[0].cnt); strcat(tags, buffer);
-			sprintf(buffer, "\tnc:i:%d", reg0->n_cregs); strcat(tags, buffer);
-			sprintf(buffer, "\ts1:i:%d", chains[0].score); strcat(tags, buffer);
-			// sprintf(buffer, "\ts2:i:%d", reg0->n_cregs > 1 ? chains[1].score : 0); strcat(tags, buffer);
-			sprintf(buffer, "\tsm:f:%.2f", mean_chain_score); strcat(tags, buffer);
-		}else {
-			sprintf(buffer, "\tcm:i:0"); strcat(tags, buffer);
-			sprintf(buffer, "\tnc:i:0"); strcat(tags, buffer);
-			sprintf(buffer, "\ts1:i:0"); strcat(tags, buffer);
-			// sprintf(buffer, "\ts2:i:0"); strcat(tags, buffer);
-			sprintf(buffer, "\tsm:f:0"); strcat(tags, buffer);
-		}
-
-		reg0->read_id = sig->rid;
-		reg0->read_name = sig->name;
-		reg0->maps[0].read_length = (s->p->ri->flag&RI_I_SIG_TARGET)?reg0->offset:(uint32_t)(read_position_scale * reg0->offset);
-		reg0->maps[0].c_id = 0;
-		reg0->maps[0].ref_id = 0;
-		reg0->maps[0].read_start_position = 0;
-		reg0->maps[0].read_end_position = 0;
-		reg0->maps[0].fragment_start_position = 0;
-		reg0->maps[0].fragment_length = 0;
-		reg0->maps[0].mapq = 0;
-		reg0->maps[0].rev = 0;
-		reg0->maps[0].mapped = 0;
-		reg0->maps[0].tags = tags;
-	}else{
-		for(uint32_t m = 0; m < reg0->n_maps; ++m){
-			char *tags = (char *)malloc(1024 * sizeof(char));
-			uint32_t c_id = reg0->maps[m].c_id;
-			tags[0] = '\0'; // make it an empty string
-			char buffer[256]; // temporary buffer
-			sprintf(buffer, "mt:f:%.6f", mapping_time * 1000); strcat(tags, buffer);
-			sprintf(buffer, "\tci:i:%d", c_count + 1); strcat(tags, buffer);
-			sprintf(buffer, "\tsl:i:%d", qlen); strcat(tags, buffer);
-			sprintf(buffer, "\tcm:i:%d", chains[c_id].cnt); strcat(tags, buffer);
-			sprintf(buffer, "\tnc:i:%d", reg0->n_cregs); strcat(tags, buffer);
-			sprintf(buffer, "\ts1:i:%d", chains[c_id].score); strcat(tags, buffer);
-			// sprintf(buffer, "\ts2:i:%d", reg0->n_cregs > 1 ? chains[1].score : 0); strcat(tags, buffer);
-			sprintf(buffer, "\tsm:f:%.2f", mean_chain_score); strcat(tags, buffer);
-
-			/* Append DTW alignment tags when CIGAR output is enabled */
-			if (cigar_results && cigar_results[m].alignment) {
-				sprintf(buffer, "\talns:f:%.6f", chains[c_id].alignment_score); strcat(tags, buffer);
-				char *aln_str = dtwresult_to_string(&cigar_results[m]);
-				size_t cur_len = strlen(tags);
-				size_t aln_len = strlen(aln_str);
-				tags = (char *)realloc(tags, cur_len + aln_len + 16);
-				strcat(tags, "\taln:s:");
-				strcat(tags, aln_str);
-				free(aln_str);
-			}
-
-			reg0->read_id = sig->rid;
-			reg0->read_name = sig->name;
-			reg0->maps[m].read_length = (s->p->ri->flag&RI_I_SIG_TARGET)?(reg0->offset):(uint32_t)(read_position_scale*chains[c_id].qe);
-			reg0->maps[m].ref_id = chains[c_id].rid;
-			reg0->maps[m].read_start_position = (s->p->ri->flag&RI_I_SIG_TARGET)?chains[c_id].qs:(uint32_t)(read_position_scale*chains[c_id].qs);
-			reg0->maps[m].read_end_position = (s->p->ri->flag&RI_I_SIG_TARGET)?chains[c_id].qe:(uint32_t)(read_position_scale*chains[c_id].qe);
-			if(s->p->ri->flag&RI_I_SIG_TARGET) reg0->maps[m].fragment_start_position = chains[c_id].rev?(uint32_t)(s->p->ri->sig[chains[c_id].rid].l_sig+1-chains[c_id].re):chains[c_id].rs;
-			else reg0->maps[m].fragment_start_position = chains[c_id].rev?(uint32_t)(s->p->ri->seq[chains[c_id].rid].len+1-chains[c_id].re):chains[c_id].rs;
-			reg0->maps[m].fragment_length = (uint32_t)(chains[c_id].re - chains[c_id].rs + 1);
-			reg0->maps[m].mapq = chains[c_id].mapq;
-			reg0->maps[m].rev = (chains[c_id].rev == 1)?1:0;
-			reg0->maps[m].mapped = 1; 
-			reg0->maps[m].tags = tags;
-		}
-	}
-
-	/* Free cigar alignment results */
-	if (cigar_results) {
-		for (uint32_t m = 0; m < reg0->n_maps; m++) {
-			free(cigar_results[m].alignment);
-		}
-		free(cigar_results);
-	}
-
-	if(reg0->prev_anchors) {ri_kfree(b->km, reg0->prev_anchors); reg0->prev_anchors = NULL; reg0->n_prev_anchors = 0;}
-	if(reg0->creg){free(reg0->creg); reg0->creg = NULL; reg0->n_cregs = 0;}
-	if(reg0->events){ri_kfree(b->km, reg0->events); reg0->events = NULL; reg0->offset = 0;}
-
-	if (b->km) {
-		ri_km_stat_t kmst;
-		ri_km_stat(b->km, &kmst);
-		// assert(kmst.n_blocks == kmst.n_cores);
-		ri_km_destroy(b->km);
-		b->km = ri_km_init();
-	}
+	ri_map_cleanup(reg0, b);
 }
 
 /* Live streaming wrappers: expose static functions for rlive.cpp */

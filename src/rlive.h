@@ -21,6 +21,8 @@ typedef struct ri_live_opt_s {
 	char *tls_cert_path;     /* path to CA certificate for TLS */
 	int duration_seconds;    /* run for N seconds, 0 = until experiment ends [0] */
 	int debug;               /* 1 = print chunk metadata to stderr, no mapping */
+	int no_sig_filter;       /* 1 = disable 30-200 pA signal filter [0] */
+	int uncalibrated;        /* 1 = request UNCALIBRATED data and apply per-channel cal [0] */
 } ri_live_opt_t;
 
 /**

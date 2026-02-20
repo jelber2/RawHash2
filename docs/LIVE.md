@@ -4,9 +4,13 @@
 
 RawHash2 now supports **real-time signal streaming** from Oxford Nanopore's MinKNOW sequencing control software via gRPC. This enables selective sequencing workflows where mapping decisions are made in real-time as reads are being sequenced.
 
-**Current Status:** Beta version, tested and validated with the Icarust simulator. Real MinKNOW integration is straightforward but has not been tested on physical hardware.
+**Current Status:** Beta version with **incremental chunk processing** and **decision feedback**. Tested and validated with the Icarust simulator. Real MinKNOW integration is straightforward but has not been tested on physical hardware.
 
-**Future:** Decision feedback loop — RawHash2 will be able to send unblock/stop commands back to MinKNOW for adaptive sequencing strategies.
+**Key features:**
+- **Incremental processing**: Each gRPC chunk is processed as it arrives (not accumulated then dispatched), enabling early mapping decisions
+- **Decision feedback**: Sends unblock/eject commands back to MinKNOW/Icarust when a read maps, enabling adaptive sequencing
+- **Signal calibration**: Supports both CALIBRATED (default, float32 pA from MinKNOW) and UNCALIBRATED (raw int16 ADC with per-channel calibration) modes
+- **Configurable pA filter**: 30-200 pA range filter (matching file-based pipeline) enabled by default
 
 ## Use Cases
 
@@ -136,33 +140,39 @@ bin/rawhash2 -x sensitive --r10 \
 
 **Terminal 2: Start Icarust simulator**
 
-macOS:
+Icarust must run from its own directory (to find `static/` kmer models) and needs a `config.ini` for TLS/port settings:
+
 ```bash
-export HDF5_DIR=$(brew --prefix hdf5@1.10)
-./Icarust/target/release/icarust docs/live/example_config.toml
+# Create config.ini (adjust cert-dir path to your Icarust location)
+cat > /tmp/icarust_config.ini <<EOF
+[TLS]
+cert-dir = /path/to/Icarust/static/tls_certs/
+
+[PORTS]
+manager = 10000
+position = 10001
+
+[SEQUENCER]
+channels = 3000
+EOF
+
+# Run Icarust from its directory
+cd /path/to/Icarust
+./target/release/icarust -s /path/to/RawHash2/docs/live/example_config.toml -c /tmp/icarust_config.ini
 ```
 
-Linux (with conda):
-```bash
-conda activate rawhash2-live
-./Icarust/target/release/icarust docs/live/example_config.toml
-```
-
-Icarust will output:
-```
-[INFO] Starting MinKNOW simulation...
-[INFO] Manager service listening on 127.0.0.1:10000
-[INFO] Data service listening on 127.0.0.1:10001
-```
+**Note:** The simulation profile TOML must use absolute paths for `input_genome`. The `test_live.sh` script handles all this automatically.
 
 **Terminal 3: Run RawHash2 in live mode**
 
 ```bash
 cd /path/to/RawHash2
-bin/rawhash2 --live --live-port 10001 -t 4 test.idx > live_output.paf
+bin/rawhash2 --live --live-port 10001 --live-tls \
+  --live-tls-cert /path/to/Icarust/static/tls_certs/ca.crt \
+  --live-duration 30 -t 4 test.idx > live_output.paf
 ```
 
-This connects to Icarust and starts mapping reads as they arrive. Output appears in real-time in `live_output.paf`.
+Icarust uses TLS by default, so `--live-tls` and `--live-tls-cert` are required. Reads are processed incrementally — PAF lines appear as soon as each read maps (not after the read ends).
 
 **Terminal 4: Monitor results (optional)**
 
@@ -218,10 +228,12 @@ Results saved to `/tmp/live_test.paf`.
 --live-port INT           gRPC server port [default: 10001]
 --live-first-channel INT  First channel to monitor, 1-indexed [default: 1]
 --live-last-channel INT   Last channel to monitor, 1-indexed [default: 512]
---live-tls                Use TLS encryption (required for real MinKNOW in production)
+--live-tls                Use TLS encryption (required for Icarust and real MinKNOW)
 --live-tls-cert FILE      Path to CA certificate file for TLS verification
 --live-duration INT       Run for INT seconds, 0 = until experiment ends [default: 0]
 --live-debug              Print chunk metadata to stderr (diagnostic mode, no mapping)
+--live-no-sig-filter      Disable 30-200 pA signal range filter in streaming
+--live-uncalibrated       Request uncalibrated (int16 ADC) data, apply per-channel cal
 ```
 
 ### Example Commands
@@ -328,7 +340,10 @@ CMake Error: Could not find gRPC
 Error: certificate verify failed: unable to get local issuer certificate
 ```
 
-**For Icarust (insecure by default):** Do NOT use `--live-tls`. This error indicates Icarust is not configured for TLS.
+**For Icarust:** Icarust uses TLS with self-signed certs. Use the CA cert from Icarust's `static/tls_certs/` directory:
+```bash
+bin/rawhash2 --live --live-tls --live-tls-cert /path/to/Icarust/static/tls_certs/ca.crt ...
+```
 
 **For real MinKNOW:** Ensure CA certificate path is correct:
 ```bash
@@ -398,29 +413,25 @@ Multi-threaded (scales linearly):
 
 ### Latency
 
-Mean mapping time per read: ~3.0 seconds (includes DTW verification)
-
-Typical breakdown:
-- Signal accumulation: ~0.5 sec
-- Event detection: ~0.1 sec
-- Seed matching: ~0.5 sec
-- Chaining + DTW: ~1.9 sec
+With incremental chunk processing, mapping decisions are made DURING the read — typically after 2-3 chunks (each chunk = 4000 samples = 1 second at 4 kHz):
+- Most reads map in **2 chunks** (~0.4 sec mapping time)
+- Some reads need 3-7 chunks (~0.8–2.4 sec)
+- Decision + unblock is sent immediately upon mapping
 
 ### Quality Metrics (Icarust R10 test)
 
-60-second test on E. coli (1027 unique reads):
-- **Precision**: 1.0000 (zero false positives)
-- **Recall**: 0.9951 (99.51% mapped)
-- **F1 Score**: 0.9976
-- **MAPQ distribution**: 79.1% at MAPQ=60 (max), median=60
-- **Mapped rate**: 99.51%
+20-second test on E. coli (10 channels, 22 reads):
+- **Mapped rate**: 100% (22/22 mapped)
+- **MAPQ distribution**: 45% at MAPQ=60 (maximum quality)
+- **Chunks to map**: 50% at 2 chunks, 27% at 3 chunks
+- **Unblock actions**: sent for all mapped reads
 
 Note: These numbers are for Icarust (idealized signal). Real MinKNOW signal will have lower accuracy due to basecalling noise, chimeric reads, etc.
 
 ### Resource Usage
 
-Per-read memory: ~50 KB (accumulating signal)
-CPU: Single-threaded utilization ~80%, scales near-linear with `-t` threads
+Per-channel memory: ~50 KB (mapping state + signal buffer)
+CPU: Single-threaded, sequential per-channel processing. Scales via channel count.
 
 ---
 
@@ -470,7 +481,7 @@ bin/rawhash2 --live --live-port 10001 -t 4 ref.idx > live_output.paf
 
 Both produce identical PAF format. Key differences:
 - **File-based**: Processes all reads, reports final statistics
-- **Live**: Processes as chunks arrive, real-time decision making
+- **Live**: Processes each chunk incrementally, makes decisions mid-read, sends unblock actions
 
 For evaluation: compare mapping rate, MAPQ, precision/recall on same reference set.
 
@@ -480,7 +491,7 @@ For evaluation: compare mapping rate, MAPQ, precision/recall on same reference s
 
 ### Currently Not Supported
 
-- **Decision feedback**: Unblock/stop commands not sent back to MinKNOW
+- **Policy-based decisions**: Currently always ejects on mapping, keeps on unmapped. Target vs non-target classification is not yet implemented.
 - **Sequence Until**: Real-time abundance monitoring not integrated
 - **Real MinKNOW**: Only tested with Icarust simulator (gRPC interface is compatible)
 - **Multi-position**: Single flowcell only
@@ -488,9 +499,9 @@ For evaluation: compare mapping rate, MAPQ, precision/recall on same reference s
 
 ### Planned Enhancements
 
-- Bi-directional feedback for adaptive sequencing
+- Policy-based decision logic (target vs non-target, abundance thresholds)
 - Sequence Until + live mode integration
-- Performance optimization (per-chunk dispatch without accumulation)
+- Multi-threaded per-response channel processing
 - Real MinKNOW validation on physical hardware
 
 ---
