@@ -135,12 +135,12 @@ echo "Found ${N_FAST5} FAST5 file(s)."
 ###############################################################################
 mkdir -p "${OUTPUT_DIR}"
 
-echo "Running: ${POD5_BIN} convert fast5 -r --output-one-to-one ${FAST5_DIR} -t ${THREADS} -o ${OUTPUT_DIR} ${FAST5_DIR}"
+echo "Running: ${POD5_BIN} convert fast5 -r --one-to-one ${FAST5_DIR} -t ${THREADS} -o ${OUTPUT_DIR} ${FAST5_DIR}"
 echo ""
 
 "${POD5_BIN}" convert fast5 \
     -r \
-    --output-one-to-one "${FAST5_DIR}" \
+    --one-to-one "${FAST5_DIR}" \
     -t "${THREADS}" \
     -o "${OUTPUT_DIR}" \
     "${FAST5_DIR}"

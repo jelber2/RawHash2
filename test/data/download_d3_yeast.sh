@@ -17,14 +17,27 @@ Fast5-to-Fastq/fast5_to_fastq.py fast5_files/ | awk 'BEGIN{line = 0}{line++; if(
 # single_to_multi_fast5 -i ./fast5_files/ -s ./multi_fast5_files_test/ -n 4000 -t 32 -c vbz
 # rm -rf ./fast5_files; mv ./multi_fast5_files/ ./fast5_files;
 
-# Optional: fast5 -> pod5 conversion. Requires the pod5 tool: https://github.com/nanoporetech/pod5-file-format 
+# Optional: Convert FAST5 to POD5 (recommended format for RawHash2 and benchmark pipeline).
 # Note: Single to multi conversion (see above) must be performed to convert these fast5 files to pod5.
-# pod5 convert fast5 -r -t 32 --output-one-to-one ./fast5_files/ ./fast5_files/ ./pod5_files/
+# Requires: conda install -c conda-forge pod5
+# Using the benchmark conversion script:
+#   SCRIPTS=/path/to/rawhash2/test/benchmark/scripts
+#   bash ${SCRIPTS}/1_fast5_to_pod5.sh -i ./fast5_files -o ./pod5_files -t 8
+# Or directly:
+#   pod5 convert fast5 -r --one-to-one ./fast5_files -t 8 -o ./pod5_files ./fast5_files
 
 #We have provided the Zenodo link to this reads.fasta file to avoid the hassle above
 # wget https://zenodo.org/record/7582018/files/reads.fasta
 
 #Downloading S.cerevisiae S288c (Yeast) reference genome from UCSC
-wget https://hgdownload.soe.ucsc.edu/goldenPath/sacCer3/bigZips/sacCer3.fa.gz; gunzip sacCer3.fa.gz; mv sacCer3.fa ref.fa; 
+wget https://hgdownload.soe.ucsc.edu/goldenPath/sacCer3/bigZips/sacCer3.fa.gz; gunzip sacCer3.fa.gz; mv sacCer3.fa ref.fa;
+
+# Optional: Basecall using dorado (R9.4.1 chemistry, dorado 0.9.2).
+# Requires pod5_files/ (see conversion above) and a dorado binary.
+# Using the benchmark basecalling script:
+#   bash ${SCRIPTS}/3_run_dorado.sh \
+#     -b /path/to/dorado-0.9.2/bin/dorado \
+#     -m dna_r9.4.1_e8_hac@v3.3 -i ./pod5_files -o ./dorado-0.9.2 -t 16
+# Output: dorado-0.9.2/reads.bam, dorado-0.9.2/reads.fasta
 
 cd ..

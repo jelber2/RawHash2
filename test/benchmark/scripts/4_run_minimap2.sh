@@ -63,18 +63,6 @@ EOF
 }
 
 ###############################################################################
-# Tool discovery
-###############################################################################
-find_tool() {
-    local tool="$1"
-    if command -v "${tool}" &>/dev/null; then
-        echo "${tool}"
-        return 0
-    fi
-    echo ""
-}
-
-###############################################################################
 # Argument parsing
 ###############################################################################
 while getopts ":i:r:o:t:h" opt "$@"; do
@@ -105,7 +93,10 @@ READS="$(realpath "${READS}")"
 REF="$(realpath "${REF}")"
 OUTPUT_DIR="$(realpath -m "${OUTPUT_DIR}")"
 
-MM2_BIN="$(find_tool minimap2)"
+MM2_BIN=""
+if command -v minimap2 &>/dev/null; then
+    MM2_BIN="minimap2"
+fi
 if [ -z "${MM2_BIN}" ]; then
     echo "Error: 'minimap2' not found in PATH." >&2
     echo "  Install: conda install -c bioconda minimap2  (then activate your environment)" >&2

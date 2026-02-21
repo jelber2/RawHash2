@@ -26,19 +26,13 @@ RawHash performs real-time mapping of nanopore raw signals. When the prefix of r
 
 # Recent changes
 
-* We have integrated **MinKNOW gRPC real-time signal streaming support (BETA)** for live selective sequencing workflows. This feature enables RawHash2 to receive signals directly from MinKNOW or the Icarust simulator and provide real-time mapping decisions. Currently tested and validated with the Icarust simulator. For detailed setup, installation, and testing instructions, see [docs/LIVE.md](docs/LIVE.md).
-
-* We have integrated a new overlapping mechanism along with its presets, for our new mechanism, called **Rawsamble**. Please see below the corresponding section to run Rawsamble (i.e., overlapping) with RawHash.
-
-* We came up with a better and more accurate quantization mechanism in RawHash2. The new quantization mechanism dynamically arranges the bucket sizes that each signal value is quantized depending on the normalized distribution of the signal values. **This provides significant improvements in both accuracy and performance.**
-
-* We have integrated the signal alignment functionality with DTW as proposed in RawAlign (see the citation below). The parameters may still not be highly optimized as this is still in experimental stage. Use it with caution.
-
-* All RawHash source code is now written in C. When compiling with POD5 or HDF5, sources are compiled as C++ to satisfy the requirements of those external libraries.
-
-* We have released RawHash2, a more sensitive and faster raw signal mapping mechanism with substantial improvements over RawHash. RawHash2 is available within this repository. You can still use the earlier version, RawHash v1, from [this release](https://github.com/CMU-SAFARI/RawHash/releases/tag/v1.0).
-
-* It is now possible to disable compiling HDF5, SLOW5, and POD5. Please check the `Compiling with HDF5, SLOW5, and POD5` section below for details.
+* **MinKNOW gRPC real-time streaming (BETA):** Live selective sequencing via MinKNOW or Icarust simulator. See [docs/LIVE.md](docs/LIVE.md).
+* **Rawsamble overlapping:** All-vs-all raw signal overlapping for *de novo* assembly. See [Rawsamble section](#rawsamble-for-overlapping-and-assembly-construction).
+* **Adaptive quantization:** Dynamic bucket sizing based on signal distribution — significant accuracy and performance gains.
+* **RawAlign DTW integration:** Signal alignment via Dynamic Time Warping (experimental). See citation below.
+* **Pure C codebase:** All source is C; compiled as C++ only when POD5/HDF5 are enabled.
+* **RawHash2 release:** Substantial improvements over RawHash v1, which is still available from [this release](https://github.com/CMU-SAFARI/RawHash/releases/tag/v1.0).
+* **Selective format compilation:** HDF5, SLOW5, and POD5 can each be enabled/disabled independently.
 
 # Installation
 
@@ -226,90 +220,52 @@ For comprehensive setup, testing, and troubleshooting instructions, see **[docs/
 
 ## Getting help
 
-You can print the help message to learn how to use `rawhash2`:
-
 ```bash
-rawhash2
-```
-
-or 
-
-```bash
-rawhash2 -h
+rawhash2 -h   # print full usage and options
 ```
 
 ## Indexing
-Indexing is similar to minimap2's usage. We additionally include the pore models located under ./extern
 
-Below is an example that generates an index file `ref.ind` for the reference genome `ref.fasta` using a certain k-mer model located under `extern` and `32` threads.
-
-* R9.4 indexing:
+Indexing is similar to minimap2's usage. Pore models are located under `./extern`. You can jump directly to mapping (the index is built on-the-fly), but pre-building is recommended for real-time applications.
 
 ```bash
-rawhash2 -d ref.ind -p extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model -t 32 ref.fasta
+# R9.4 indexing
+rawhash2 -d ref.ind \
+  -p extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model \
+  -t 32 ref.fasta
+
+# R10.4.1 indexing (different pore model + --r10 flag)
+rawhash2 -d ref.ind \
+  -p extern/local_kmer_models/uncalled_r1041_model_only_means.txt \
+  --r10 -t 32 ref.fasta
 ```
-
-* R10.4.1 indexing (uses a different pore model and the `--r10` flag):
-
-```bash
-rawhash2 -d ref.ind -p extern/local_kmer_models/uncalled_r1041_model_only_means.txt --r10 -t 32 ref.fasta
-```
-
-Note that you can directly jump to mapping without creating the index because RawHash2 is able to generate the index relatively quickly on-the-fly within the mapping step. However, a real-time genome analysis application may still prefer generating the indexing before the mapping step. Thus, we suggest creating the index before the mapping step.
 
 ## Mapping
 
-It is possible to provide inputs as FAST5 files from multiple directories. It is also possible to provide a list of files matching a certain pattern such as `test/data/contamination/fast5_files/Min*.fast5`
+Inputs can be directories of signal files (FAST5, POD5, SLOW5, BLOW5), individual files, or glob patterns. When there are many files (thousands+), pass directories rather than individual files. Use `-o mapping.paf` to write output to a file, or redirect stdout.
 
-* Example usage where multiple files matching a certain the pattern `test/data/contamination/fast5_files/Min*.fast5` and fast5 files inside the `test/data/d1_sars-cov-2_r94/fast5_files` directory are inputted to rawhash2 using `32` threads and the previously generated `ref.ind` index:
+**Mapping presets:**
+
+| Preset | Use case | Flag |
+|--------|----------|------|
+| `viral` | Viral genomes | `-x viral` |
+| `sensitive` | Small-medium genomes (<500M) | `-x sensitive` |
+| `fast` | Large genomes (>500M) | `-x fast` |
+| `faster` | Very large metagenomes (>10G), uses minimizer seeding (~3x faster) | `-x faster` |
+
+> **R10.4.1 data:** Add `--r10` to any preset. Use the R10 pore model for indexing (see [Indexing](#indexing)).
+
+**Examples:**
 
 ```bash
-rawhash2 -t 32 ref.ind test/data/contamination/fast5_files/Min*.fast5 test/data/d1_sars-cov-2_r94/fast5_files > mapping.paf
-```
-
-* Another example usage where 1) we only input a directory including FAST5 files as set of raw signals and 2) the output is directly saved in a file.
-
-```bash
-rawhash2 -t 32 -o mapping.paf ref.ind test/data/d1_sars-cov-2_r94/fast5_files
-```
-
-**IMPORTANT** if there are many fast5 files that rawhash2 needs to process (e.g., thousands of them), we suggest that you specify **only** the directories that contain these fast5 files
-
-RawHash2 also provides a set of default parameters that can be preset automatically.
-
-* Mapping reads to a viral reference genome using its corresponding preset:
-
-```
+# R9.4, viral preset
 rawhash2 -t 32 -x viral ref.ind test/data/d1_sars-cov-2_r94/fast5_files > mapping.paf
-```
 
-* Mapping reads to small reference genomes (<500M bases) using its corresponding preset:
-
-```
-rawhash2 -t 32 -x sensitive ref.ind test/data/d4_green_algae_r94/fast5_files > mapping.paf
-```
-
-* If you want to map a R10.4.1 dataset (or R10 in general), please insert the following preset along with other presets:
-
-```
+# R10.4.1, sensitive preset
 rawhash2 -t 32 -x sensitive --r10 ref.ind test/data/d6_ecoli_r104/fast5_files > mapping.paf
 ```
 
-For indexing, please use the k-mer model generated by [UNCALLED4](./extern/local_kmer_models/uncalled_r1041_model_only_means.txt)
-
-* Mapping reads to large reference genomes (>500M bases) using its corresponding preset:
-
-```
-rawhash2 -t 32 -x fast ref.ind test/data/d5_human_na12878_r94/fast5_files > mapping.paf
-```
-
-RawHash2 provides another set of default parameters that can be used for very large metagenomic samples (>10G). To achieve efficient search, it uses the minimizer seeding in this parameter setting, which is slightly less accurate than the non-minimizer mode but much faster (around 3X).
-
-```
-rawhash2 -t 32 -x faster ref.ind test/data/d5_human_na12878_r94/fast5_files > mapping.paf
-```
-
-The output will be saved to `mapping.paf` in a modified PAF format used by [Uncalled](https://github.com/skovaka/UNCALLED).
+The output is in a modified PAF format used by [Uncalled](https://github.com/skovaka/UNCALLED).
 
 # Functionalities
 
@@ -317,21 +273,7 @@ RawHash2 provides several key functionalities beyond basic read mapping. This se
 
 ## R10.4.1 Support
 
-RawHash2 supports R10.4.1 (and R10 in general) nanopore data. R10 uses 9-mer pore models (vs 6-mer for R9.4) and different device parameters (e.g., different sampling rate). Use the `--r10` flag along with the appropriate pore model.
-
-**Indexing for R10.4.1:**
-
-```bash
-rawhash2 -d ref_r10.ind \
-  -p extern/local_kmer_models/uncalled_r1041_model_only_means.txt \
-  --r10 -t 32 ref.fasta
-```
-
-**Mapping for R10.4.1:**
-
-```bash
-rawhash2 -t 32 -x sensitive --r10 ref_r10.ind pod5_files/ > mapping.paf
-```
+RawHash2 supports R10.4.1 (and R10 in general) nanopore data. R10 uses 9-mer pore models (vs 6-mer for R9.4) and different device parameters (e.g., different sampling rate). Use the `--r10` flag along with the appropriate pore model. See the [Indexing](#indexing) and [Mapping](#mapping) sections for R10.4.1 examples.
 
 ## Signal Alignment (RawAlign)
 
@@ -357,32 +299,11 @@ DTW options control the alignment behavior:
 
 By default, RawHash2 uses a built-in t-test peak detector to segment raw signal into events. You can instead provide pre-computed segmentation data using one of three mutually exclusive options:
 
-### Peak Positions (`--peaks-file`)
-
-Provide pre-computed peak positions (segment boundaries) in the raw signal.
-
-File format (tab-separated):
-```
-read_id    peak1 peak2 peak3 ... peakN
-```
-
-### Event Values (`--events-file`)
-
-Provide pre-computed event-level values (e.g., from an external segmentation tool).
-
-File format (tab-separated):
-```
-read_id    ev1 ev2 ev3 ... evN
-```
-
-### Move Tables from Dorado (`--moves-file`)
-
-Use move table data from [dorado](https://github.com/nanoporetech/dorado) basecaller output. The move table encodes which signal samples correspond to base transitions, enabling RawHash2 to use dorado's neural-network-based segmentation.
-
-File format (tab-separated, one line per read):
-```
-read_id    mv:B:c,STRIDE,0,1,...    ts:i:OFFSET
-```
+| Option | Input format (tab-separated, one line per read) | Use case |
+|--------|------------------------------------------------|----------|
+| `--peaks-file` | `read_id  peak1 peak2 ... peakN` | Pre-computed segment boundaries |
+| `--events-file` | `read_id  ev1 ev2 ... evN` | Pre-computed event-level values |
+| `--moves-file` | `read_id  mv:B:c,STRIDE,0,1,...  ts:i:OFFSET` | Dorado move tables (neural-network segmentation) |
 
 **Extract move tables from a dorado BAM:**
 
@@ -420,28 +341,25 @@ rawhash2 -t 32 -x sensitive --depletion ref.ind pod5_files/ > mapping.paf
 
 ## Rawsamble (for overlapping and assembly construction)
 
-Our new overlapping mechanism, Rawsamble, is now integrated in RawHash2. To create overlaps, you can construct the index from signals and perform overlapping using this index as follows:
-
-```
-rawhash2 -x ava -p ../../rawhash2/extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model -d ava.ind -t32 test/data/d3_yeast_r94/fast5_files/
-```
-
-Then perform overlapping using this index:
-
-```
-rawhash2 -x ava -t32 ava.ind test/data/d3_yeast_r94/fast5_files/ > ava.paf
-```
-
-We provide the following presets for Rawsamble to enable the overlapping mode (shown in the help message):
-
+Rawsamble performs all-vs-all raw signal overlapping for *de novo* assembly. Build an index from signals, then overlap:
 
 ```bash
-Rawsamble Presets:
-                 - ava     	All-vs-all overlapping mode (default for Rawsamble)
-                 - ava-sensitive     	More sensitive All-vs-all overlapping mode. Can be slightly slower than -ava but likely to generate longer unitigs in downstream asssembly
-                 - ava-viral     	All-vs-all overlapping for very small genomes such as viral genomes.
-                 - ava-large     	All-vs-all overlapping for large genomes of size > 10Gb
+# Index
+rawhash2 -x ava -p extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model \
+  -d ava.ind -t 32 test/data/d3_yeast_r94/fast5_files/
+
+# Overlap
+rawhash2 -x ava -t 32 ava.ind test/data/d3_yeast_r94/fast5_files/ > ava.paf
 ```
+
+**Rawsamble presets:**
+
+| Preset | Use case |
+|--------|----------|
+| `ava` | All-vs-all overlapping (default) |
+| `ava-sensitive` | More sensitive; may produce longer unitigs in downstream assembly |
+| `ava-viral` | Very small genomes (e.g., viral) |
+| `ava-large` | Large genomes (>10Gb) |
 
 ## Potential issues you may encounter during mapping
 

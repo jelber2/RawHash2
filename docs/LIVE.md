@@ -519,6 +519,6 @@ If you use RawHash2 live streaming in your work, please cite:
 ## Support & Feedback
 
 For issues, questions, or feature requests:
-- GitHub Issues: https://github.com/CMU-SAFARI/RawHash2/issues
+- GitHub Issues: https://github.com/STORMgroup/RawHash2/issues
 - Check troubleshooting section above first
 - Include: OS, gRPC version, RawHash2 build log, error message

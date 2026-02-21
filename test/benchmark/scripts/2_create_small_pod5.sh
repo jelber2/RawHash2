@@ -63,17 +63,6 @@ EOF
 }
 
 ###############################################################################
-# Tool discovery
-###############################################################################
-find_pod5() {
-    if command -v pod5 &>/dev/null; then
-        echo "pod5"
-        return 0
-    fi
-    echo ""
-}
-
-###############################################################################
 # Argument parsing
 ###############################################################################
 while getopts ":i:o:n:t:h" opt "$@"; do
@@ -117,7 +106,10 @@ if ! [[ "${N_READS}" =~ ^[0-9]+$ ]] || [ "${N_READS}" -le 0 ]; then
 fi
 
 # Discover pod5
-POD5_BIN="$(find_pod5)"
+POD5_BIN=""
+if command -v pod5 &>/dev/null; then
+    POD5_BIN="pod5"
+fi
 if [ -z "${POD5_BIN}" ]; then
     echo "Error: 'pod5' not found. Install via: conda install -c conda-forge pod5" >&2
     exit 1
@@ -140,16 +132,23 @@ fi
 echo "Found ${N_POD5} POD5 file(s) in input directory."
 
 ###############################################################################
-# Step 1: Get read IDs
+# Step 1: Get read IDs (process files one at a time to avoid SIGPIPE)
 ###############################################################################
-TEMP_IDS="$(mktemp /tmp/rh2_read_ids_XXXXXX.txt)"
+mkdir -p "${OUTPUT_DIR}"
+TEMP_IDS="${OUTPUT_DIR}/read_ids.txt"
 trap 'rm -f "${TEMP_IDS}"' EXIT
+: > "${TEMP_IDS}"
 
 echo "Extracting up to ${N_READS} read IDs..."
-"${POD5_BIN}" view -r --ids "${INPUT_DIR}" \
-    | tail -n +2 \
-    | head -"${N_READS}" \
-    > "${TEMP_IDS}"
+COLLECTED=0
+while IFS= read -r pod5_file; do
+    [ "${COLLECTED}" -ge "${N_READS}" ] && break
+    REMAINING=$(( N_READS - COLLECTED ))
+    # -I = only read_id, -H = no header; || true to ignore SIGPIPE from head
+    "${POD5_BIN}" view -IH "${pod5_file}" \
+        | head -n "${REMAINING}" >> "${TEMP_IDS}" || true
+    COLLECTED=$(wc -l < "${TEMP_IDS}")
+done < <(find "${INPUT_DIR}" -name "*.pod5" -type f | sort)
 
 ACTUAL_COUNT=$(wc -l < "${TEMP_IDS}")
 
@@ -168,7 +167,6 @@ fi
 ###############################################################################
 # Step 2: Filter to create small pod5
 ###############################################################################
-mkdir -p "${OUTPUT_DIR}"
 OUTPUT_FILE="${OUTPUT_DIR}/small.pod5"
 
 echo "Creating ${OUTPUT_FILE} ..."

@@ -33,7 +33,7 @@ conda environment with the required packages installed.
 | Tool       | Purpose                          | Min version |
 |------------|----------------------------------|-------------|
 | `pod5`     | Scripts 1 and 2 (POD5 I/O)      | 0.3         |
-| `dorado`   | Script 3 (basecalling)           | 0.9.5       |
+| `dorado`   | Script 3 (basecalling)           | 0.9.2       |
 | `samtools` | Script 3 (BAM → FASTA)          | 1.10        |
 | `minimap2` | Script 4 (ground-truth mapping)  | 2.24        |
 | `rawhash2` | Scripts 5 and 6 (signal mapping) | 2.0         |
@@ -117,12 +117,7 @@ bash ${SCRIPTS}/1_fast5_to_pod5.sh \
   -i /path/to/fast5_files \
   -t 8
 # Default output: /path/to/pod5_files/ (mirrored structure)
-
-# To specify the output location explicitly:
-bash ${SCRIPTS}/1_fast5_to_pod5.sh \
-  -i /path/to/fast5_files \
-  -o /path/to/pod5_files \
-  -t 8
+# Use -o /path/to/pod5_files to specify the output location explicitly.
 ```
 
 **What it does:** Runs `pod5 convert fast5 -r --output-one-to-one` on all fast5 files,
@@ -173,25 +168,17 @@ bash ${SCRIPTS}/3_run_dorado.sh \
   -t 16
 ```
 
-**R9.4.1 chemistry (dorado 0.9.5):**
+**R9.4.1 chemistry (dorado 0.9.2):**
 ```bash
 bash ${SCRIPTS}/3_run_dorado.sh \
-  -b /path/to/dorado-0.9.5/bin/dorado \
+  -b /path/to/dorado-0.9.2/bin/dorado \
   -m dna_r9.4.1_e8_hac@v3.3 \
   -i ${DATA}/small_pod5_files \
   -o ${DATA}/dorado_small \
   -t 16
 ```
 
-**CPU mode (no GPU; slower; for testing only):**
-```bash
-bash ${SCRIPTS}/3_run_dorado.sh \
-  -b ${DORADO} \
-  -m hac \
-  -i ${DATA}/small_pod5_files \
-  -o ${DATA}/dorado_small_cpu \
-  -x cpu -t 16
-```
+> **CPU mode:** Add `-x cpu` to force CPU basecalling (slower; useful if no GPU available).
 
 **Output:** `reads.bam`, `reads.fasta`, `basecall.time` in the output directory.
 
@@ -301,20 +288,9 @@ bash ${SCRIPTS}/6_run_rawhash2_eval.sh \
   --r10 -e "-w 3" -n rawhash2_w3 -t 8
 ```
 
-**Example B — compare the -w 3 run against the v0 baseline rawhash2 PAF**
-(shows which reads are classified differently relative to the baseline):
-```bash
-bash ${SCRIPTS}/6_run_rawhash2_eval.sh \
-  -b ${RH2} \
-  -i ${DATA}/small_pod5_files \
-  -r ${DATA}/ref.fa \
-  -p ${PORE_R10} \
-  -g ${DATA}/v0_baseline/rawhash2_baseline.paf \
-  -o ${DATA}/eval_w3_vs_baseline \
-  --r10 -e "-w 3" -n rawhash2_w3_vs_baseline -t 8
-```
+> **Comparing against baseline:** Use `-g ${DATA}/v0_baseline/rawhash2_baseline.paf` instead of the minimap2 PAF to see which reads are classified differently relative to your v0 baseline.
 
-**Example C — test a different preset (viral):**
+**Example B — test a different preset (viral):**
 ```bash
 bash ${SCRIPTS}/6_run_rawhash2_eval.sh \
   -b ${RH2} \
@@ -332,33 +308,16 @@ bash ${SCRIPTS}/6_run_rawhash2_eval.sh \
 
 ```bash
 DATA_D2=/path/to/your/r94/data
+DORADO_R9=/path/to/dorado-0.9.2/bin/dorado
+PORE_R9=/path/to/rawhash2/extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model
 
-# Step 2 — create small subset
-bash ${SCRIPTS}/2_create_small_pod5.sh \
-  -i ${DATA_D2}/pod5_files -n 4000
-
-# Step 3 — basecall (R9.4.1 uses dorado 0.9.5)
-bash ${SCRIPTS}/3_run_dorado.sh \
-  -b /path/to/dorado-0.9.5/bin/dorado \
-  -m dna_r9.4.1_e8_hac@v3.3 \
-  -i ${DATA_D2}/small_pod5_files \
-  -o ${DATA_D2}/dorado_small -t 16
-
-# Step 4 — minimap2 ground truth
-bash ${SCRIPTS}/4_run_minimap2.sh \
-  -i ${DATA_D2}/dorado_small/reads.fasta \
-  -r ${DATA_D2}/ref.fa \
-  -o ${DATA_D2}/minimap2_small -t 8
-
-# Step 5 — baseline (no --r10 for R9.4.1)
-bash ${SCRIPTS}/5_run_rawhash2_baseline.sh \
-  -b ${RH2} \
-  -i ${DATA_D2}/small_pod5_files \
-  -r ${DATA_D2}/ref.fa \
-  -p /path/to/rawhash2/extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model \
-  -g ${DATA_D2}/minimap2_small/true_mappings.paf \
-  -o ${DATA_D2}/v0_baseline -t 8
+bash ${SCRIPTS}/2_create_small_pod5.sh -i ${DATA_D2}/pod5_files -n 4000
+bash ${SCRIPTS}/3_run_dorado.sh -b ${DORADO_R9} -m dna_r9.4.1_e8_hac@v3.3 -i ${DATA_D2}/small_pod5_files -o ${DATA_D2}/dorado_small -t 16
+bash ${SCRIPTS}/4_run_minimap2.sh -i ${DATA_D2}/dorado_small/reads.fasta -r ${DATA_D2}/ref.fa -o ${DATA_D2}/minimap2_small -t 8
+bash ${SCRIPTS}/5_run_rawhash2_baseline.sh -b ${RH2} -i ${DATA_D2}/small_pod5_files -r ${DATA_D2}/ref.fa -p ${PORE_R9} -g ${DATA_D2}/minimap2_small/true_mappings.paf -o ${DATA_D2}/v0_baseline -t 8
 ```
+
+> **Note:** Omit `--r10` for R9.4.1 data. Use dorado 0.9.2 with explicit model `dna_r9.4.1_e8_hac@v3.3`.
 
 ---
 
@@ -384,10 +343,10 @@ bash scripts/5_run_rawhash2_baseline.sh -h
 
 | Chemistry | Dorado version | Dorado model | RawHash2 pore model | RawHash2 flag |
 |-----------|---------------|--------------|---------------------|---------------|
-| R9.4.1    | 0.9.5         | `dna_r9.4.1_e8_hac@v3.3` | `extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model` | *(none)* |
+| R9.4.1    | 0.9.2         | `dna_r9.4.1_e8_hac@v3.3` | `extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model` | *(none)* |
 | R10.4.1   | 1.4.0         | `hac` (auto-selects latest model) | `extern/local_kmer_models/uncalled_r1041_model_only_means.txt` | `--r10` |
 
-> **Note:** Dorado 0.9.5 is used for R9.4.1 and 1.4.0 for R10.4.1. With Dorado 0.9.5+,
+> **Note:** Dorado 0.9.2 is used for R9.4.1 and 1.4.0 for R10.4.1. With Dorado 0.9.2+,
 > models are referenced by name and auto-downloaded on first use rather than requiring
 > a local model path.
 

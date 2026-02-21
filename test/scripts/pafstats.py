@@ -69,7 +69,7 @@ class PafEntry:
         """Check if two mapped entries overlap on the reference (with extension)."""
         if not (self.is_mapped and other.is_mapped):
             return False
-        if not self.rf_name.startswith(other.rf_name):
+        if self.rf_name != other.rf_name:
             return False
         st1, en1 = self.ext_ref(ext)
         st2, en2 = other.ext_ref(ext)

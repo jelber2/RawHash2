@@ -18,9 +18,9 @@
 #     -i /data/ecoli/small_pod5_files \
 #     -o /data/ecoli/dorado
 #
-# Example — GPU basecalling with explicit R9.4.1 model (dorado 0.9.5):
+# Example — GPU basecalling with explicit R9.4.1 model (dorado 0.9.2):
 #   bash 3_run_dorado.sh \
-#     -b /path/to/dorado-0.9.5-linux-x64/bin/dorado \
+#     -b /path/to/dorado-0.9.2-linux-x64/bin/dorado \
 #     -m dna_r9.4.1_e8_hac@v3.3 \
 #     -i /data/ecoli/small_pod5_files \
 #     -o /data/ecoli/dorado
@@ -89,7 +89,7 @@ Device notes:
 
 Dorado versions:
   R10.4.1 chemistry: /path/to/dorado-1.4.0-linux-x64/bin/dorado
-  R9.4.1  chemistry: /path/to/dorado-0.9.5-linux-x64/bin/dorado
+  R9.4.1  chemistry: /path/to/dorado-0.9.2-linux-x64/bin/dorado
                      (use with model: dna_r9.4.1_e8_hac@v3.3)
 
 Example:
@@ -108,21 +108,6 @@ Example:
     -o /path/to/dorado_cpu_out \\
     -x cpu
 EOF
-}
-
-###############################################################################
-# Tool discovery
-###############################################################################
-find_samtools() {
-    if [ -n "${SAMTOOLS_BIN}" ]; then
-        echo "${SAMTOOLS_BIN}"
-        return 0
-    fi
-    if command -v samtools &>/dev/null; then
-        echo "samtools"
-        return 0
-    fi
-    echo ""
 }
 
 ###############################################################################
@@ -168,7 +153,11 @@ errors=0
 INPUT_DIR="$(realpath "${INPUT_DIR}")"
 OUTPUT_DIR="$(realpath -m "${OUTPUT_DIR}")"
 
-SAMTOOLS_BIN="$(find_samtools)"
+if [ -z "${SAMTOOLS_BIN}" ]; then
+    if command -v samtools &>/dev/null; then
+        SAMTOOLS_BIN="samtools"
+    fi
+fi
 if [ -z "${SAMTOOLS_BIN}" ]; then
     echo "Error: 'samtools' not found." >&2
     echo "  Install: conda install -c bioconda samtools  (activate your environment first)" >&2
