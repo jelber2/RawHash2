@@ -45,6 +45,7 @@ OUTPUT_DIR=""
 DEVICE="auto"
 THREADS=16
 EMIT_MOVES=true
+DISABLE_SPLITTING=true
 SAMTOOLS_BIN=""
 
 ###############################################################################
@@ -72,6 +73,9 @@ Optional:
   -t INT    CPU threads for dorado (default: ${THREADS})
   --no-moves  Do NOT add --emit-moves flag
               (default: --emit-moves is included; needed for rawhash2 --moves-file)
+  --enable-read-splitting
+              Allow dorado to split reads (default: splitting is disabled via
+              --disable-read-splitting so read IDs match pod5 UUIDs)
   -s PATH   Path to samtools binary
             (default: searches PATH)
   -h        Show this help
@@ -117,6 +121,7 @@ ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-moves) EMIT_MOVES=false; shift ;;
+        --enable-read-splitting) DISABLE_SPLITTING=false; shift ;;
         *) ARGS+=("$1"); shift ;;
     esac
 done
@@ -178,6 +183,11 @@ if [ "${EMIT_MOVES}" = "true" ]; then
     MOVES_FLAG="--emit-moves"
 fi
 
+SPLITTING_FLAG=""
+if [ "${DISABLE_SPLITTING}" = "true" ]; then
+    SPLITTING_FLAG="--disable-read-splitting"
+fi
+
 mkdir -p "${OUTPUT_DIR}"
 
 BAM="${OUTPUT_DIR}/reads.bam"
@@ -192,6 +202,7 @@ echo "  output dir    : ${OUTPUT_DIR}"
 echo "  device        : ${DEVICE}"
 echo "  threads       : ${THREADS}"
 echo "  emit-moves    : ${EMIT_MOVES}"
+echo "  read-splitting: $([ "${DISABLE_SPLITTING}" = "true" ] && echo "disabled" || echo "enabled")"
 echo "  samtools      : ${SAMTOOLS_BIN}"
 echo ""
 
@@ -208,6 +219,7 @@ echo "Running dorado basecaller..."
     "${DORADO_BIN}" basecaller \
         ${DEVICE_FLAG} \
         ${MOVES_FLAG} \
+        ${SPLITTING_FLAG} \
         "${MODEL}" \
         "${INPUT_DIR}" \
     > "${BAM}" \

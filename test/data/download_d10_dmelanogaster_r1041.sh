@@ -1,12 +1,11 @@
 #!/bin/bash
 
-mkdir -p d7_saureus_r104/fast5_files/
-cd d7_saureus_r104/fast5_files
+mkdir -p d10_dmelanogaster_r1041/fast5_files/
+cd d10_dmelanogaster_r1041
 
-#Download FAST5 from AWS | Unzip; NCBI SRA Link: https://trace.ncbi.nlm.nih.gov/Traces/?run=SRR21386013
-wget -qO- https://sra-pub-src-1.s3.amazonaws.com/SRR21386013/S_aureus_JKD6159_ONT_R10.4_fast5.tar.gz.1 | tar xzv;
-
-cd ..;
+#Download FAST5 from AWS ONT Open Data (D. melanogaster, R10.4.1)
+#Source: https://labs.epi2me.io/open-data-dmelanogaster-bkim/
+aws s3 cp s3://ont-open-data/contrib/melanogaster_bkim_2023.01/flowcells/D.melanogaster.R1041.400bps/D_melanogaster_1/20221217_1251_MN20261_FAV70669_117da01a/fast5/ ./fast5_files/ --recursive --no-sign-request
 
 # Optional: Convert FAST5 to POD5 (recommended format for RawHash2 and benchmark pipeline).
 # Requires: conda install -c conda-forge pod5
@@ -16,11 +15,11 @@ cd ..;
 # Or directly:
 #   pod5 convert fast5 -r --one-to-one ./fast5_files -t 8 -o ./pod5_files ./fast5_files
 
-# Optional: Basecall using dorado (R10.4 e8.1 chemistry, dorado 0.9.2).
-# Chemistry: R10.4 e8.1, flowcell FLO-MIN112, kit SQK-NBD112-96, sample rate 4kHz.
-#   basecall_config_filename in fast5: dna_r10.4_e8.1_sup.cfg
+# Optional: Basecall using dorado (R10.4.1 e8.2 chemistry, dorado 0.9.2).
+# Chemistry: R10.4.1 e8.2, flowcell FLO-MIN114 (MinION), sample rate 4kHz.
 # Dorado version: 0.9.2.
 # Model: dna_r10.4.1_e8.2_400bps_hac@v4.1.0 (specify as full filesystem path).
+#   Note: dorado 1.4.0 with v5.2.0 model requires 5kHz data, so use dorado 0.9.2 with v4.1.0.
 # Requires pod5_files/ (see conversion above) and a dorado binary.
 # Using the benchmark basecalling script:
 #   SCRIPTS=/path/to/rawhash2/test/benchmark/scripts
@@ -30,9 +29,8 @@ cd ..;
 #     -m ${DORADO}/bin/dna_r10.4.1_e8.2_400bps_hac@v4.1.0 \
 #     -i ./pod5_files -o ./dorado-0.9.2 -t 16
 # Output: dorado-0.9.2/reads.bam, dorado-0.9.2/reads.fasta
-#TODO: Provide the direct link to download basecalled reads
 
-#Downloading Staphylococcus aureus subsp. aureus JKD6159, complete genome; Unzip; Change name;
-wget https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/144/955/GCF_000144955.2_ASM14495v2/GCF_000144955.2_ASM14495v2_genomic.fna.gz; gunzip GCF_000144955.2_ASM14495v2_genomic.fna.gz; mv GCF_000144955.2_ASM14495v2_genomic.fna ref.fa
+#Downloading D. melanogaster Release 6 reference genome (dm6) from UCSC; Unzip; Change name;
+wget https://hgdownload.soe.ucsc.edu/goldenPath/dm6/bigZips/dm6.fa.gz; gunzip dm6.fa.gz; mv dm6.fa ref.fa
 
 cd ..

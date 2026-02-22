@@ -20,12 +20,19 @@ fastq-dump -Z --fasta 0 ERR9127552 | awk '{if(substr($1,1,1) == ">"){print ">"$2
 #Downloading Escherichia coli CFT073, complete genome (https://www.ncbi.nlm.nih.gov/nuccore/AE014075.1/); Unzip; Change name;
 wget https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/007/445/GCA_000007445.1_ASM744v1/GCA_000007445.1_ASM744v1_genomic.fna.gz; gunzip GCA_000007445.1_ASM744v1_genomic.fna.gz; mv GCA_000007445.1_ASM744v1_genomic.fna ref.fa
 
-# Optional: Basecall using dorado (R10.4 chemistry, dorado 1.4.0).
+# Optional: Basecall using dorado (R10.4 e8.1 chemistry, dorado 0.9.2).
+# Chemistry: R10.4 e8.1, flowcell FLO-MIN112, kit SQK-Q20EA, sample rate 4kHz.
+#   basecall_config_filename in fast5: dna_r10.4_e8.1_hac.cfg
+# Dorado version: 0.9.2.
+# Model: dna_r10.4.1_e8.2_400bps_hac@v4.1.0 (specify as full filesystem path).
 # Requires pod5_files/ (see conversion above) and a dorado binary.
 # Using the benchmark basecalling script:
+#   SCRIPTS=/path/to/rawhash2/test/benchmark/scripts
+#   DORADO=/path/to/dorado-0.9.2-linux-x64
 #   bash ${SCRIPTS}/3_run_dorado.sh \
-#     -b /path/to/dorado-1.4.0/bin/dorado \
-#     -m hac -i ./pod5_files -o ./dorado-1.4.0 -t 16
-# Output: dorado-1.4.0/reads.bam, dorado-1.4.0/reads.fasta
+#     -b ${DORADO}/bin/dorado \
+#     -m ${DORADO}/bin/dna_r10.4.1_e8.2_400bps_hac@v4.1.0 \
+#     -i ./pod5_files -o ./dorado-0.9.2 -t 16
+# Output: dorado-0.9.2/reads.bam, dorado-0.9.2/reads.fasta
 
 cd ..

@@ -6,7 +6,7 @@ THREAD=$1
 
 #d7_saureus_r104
 OUTDIR="./rawhash2/"
-FAST5="../../../data/d7_saureus_r104/fast5_files/FAT95629_pass_barcode01_16032940_0.fast5"
+SIGNALS="../../../data/d7_saureus_r104/pod5_files/FAT95629_pass_barcode01_16032940_0.pod5"
 REF="../../../data/d7_saureus_r104/ref.fa"
 PORE="../../../../extern/local_kmer_models/uncalled_r1041_model_only_means.txt"
 PRESET="sensitive"
@@ -15,4 +15,4 @@ mkdir -p ${OUTDIR}
 #The following is the run using default parameters:
 PREFIX="d7_saureus_r104_profile_"${THREAD}
 PARAMS="--r10"
-bash ../../../scripts/run_rawhash2.sh ${OUTDIR} ${PREFIX} ${FAST5} ${REF} ${PORE} ${PRESET} ${THREAD} "${PARAMS}" > "${OUTDIR}/${PREFIX}_rawhash2_${PRESET}.out" 2> "${OUTDIR}/${PREFIX}_rawhash2_${PRESET}.err"
+bash ../../../scripts/run_rawhash2.sh ${OUTDIR} ${PREFIX} ${SIGNALS} ${REF} ${PORE} ${PRESET} ${THREAD} "${PARAMS}" > "${OUTDIR}/${PREFIX}_rawhash2_${PRESET}.out" 2> "${OUTDIR}/${PREFIX}_rawhash2_${PRESET}.err"

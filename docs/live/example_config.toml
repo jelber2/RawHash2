@@ -10,9 +10,14 @@
 # Note: Icarust must run from its own directory to find static/ kmer models.
 # Also requires a config.ini for TLS certs and port settings.
 # The test_live.sh script handles all of this automatically.
+#
+# IMPORTANT: target_yield must be greater than (global_mean_read_length * channels)
+# where channels is set in config.ini (default 3000). If the computed death_chance
+# exceeds 1.0, Icarust will crash with an InvalidProbability error.
+# With channels=3000 and mean_read_length=8000: 8000*3000 = 24M, so 100M is safe.
 
 output_path = "/tmp/icarust_test/"
-target_yield = 10000000
+target_yield = 100000000
 global_mean_read_length = 8000
 pore_type = "R10"
 nucleotide_type = "DNA"
@@ -38,10 +43,10 @@ position = "SimPosition"
 [[sample]]
 name = "E_coli_CFT073"
 
-# Path to FASTA reference
+# IMPORTANT: Use an absolute path here. Relative paths resolve from the
+# Icarust binary's working directory, which may not be what you expect.
 # This file is included in RawHash2: test/data/d9_ecoli_r1041/ref.fa
-# Adjust path if running from a different directory
-input_genome = "./test/data/d9_ecoli_r1041/ref.fa"
+input_genome = "/path/to/RawHash2/test/data/d9_ecoli_r1041/ref.fa"
 
 mean_read_length = 8000
 weight = 1

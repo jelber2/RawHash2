@@ -27,11 +27,20 @@ wget https://hgdownload.soe.ucsc.edu/goldenPath/hs1/bigZips/hs1.fa.gz; gunzip hs
 #   pod5 convert fast5 -r --one-to-one ./fast5_files -t 8 -o ./pod5_files ./fast5_files
 
 # Optional: Basecall using dorado (R9.4.1 chemistry, dorado 0.9.2).
+# Chemistry: R9.4.1, flowcell FLO-MIN106, sample rate 4kHz.
+# Dorado version: 0.9.2 (R9.4.1 models are not available in dorado >= 1.0).
+# Model: dna_r9.4.1_e8_hac@v3.3 (specify as full filesystem path).
+# Note: dorado 0.9.2 does NOT support --disable-read-splitting, so we pass
+#       --enable-read-splitting to the benchmark script to skip that flag.
 # Requires pod5_files/ (see conversion above) and a dorado binary.
 # Using the benchmark basecalling script:
+#   SCRIPTS=/path/to/rawhash2/test/benchmark/scripts
+#   DORADO=/path/to/dorado-0.9.2-linux-x64
 #   bash ${SCRIPTS}/3_run_dorado.sh \
-#     -b /path/to/dorado-0.9.2/bin/dorado \
-#     -m dna_r9.4.1_e8_hac@v3.3 -i ./pod5_files -o ./dorado-0.9.2 -t 16
+#     -b ${DORADO}/bin/dorado \
+#     -m ${DORADO}/bin/dna_r9.4.1_e8_hac@v3.3 \
+#     -i ./pod5_files -o ./dorado-0.9.2 -t 16 \
+#     --enable-read-splitting
 # Output: dorado-0.9.2/reads.bam, dorado-0.9.2/reads.fasta
 
 cd ..

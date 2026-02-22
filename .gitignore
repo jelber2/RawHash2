@@ -10,16 +10,14 @@ test/data/d7_*
 test/data/d8_*
 test/data/d9_*
 test/data/d10_*
-test/data/download_d8_*
-# test/data/download_d9_*
-test/data/download_d10_*
-test/evaluation/read_mapping/d8_*
-test/evaluation/read_mapping/d10_*
 test/data/*/*.fa
 test/data/*/*.fasta
 test/data/*/*.tar
 test/data/*/*.tar.gz
 test/data/*/fast5_files
+test/data/*/pod5_files
+test/data/*/slow5_files
+test/data/*/dorado-*/
 test/data/*/slurm-*
 test/data/Chlamydomonas*
 
@@ -55,6 +53,10 @@ test/evaluation/read_mapping/*/comparison/*.paf
 test/evaluation/read_mapping/*/comparison/*.comparison
 test/evaluation/read_mapping/*/comparison/comparison.out
 test/evaluation/read_mapping/*/comparison/comparison.err
+test/evaluation/read_mapping/*/*.time
+test/evaluation/read_mapping/*/*.out
+test/evaluation/read_mapping/*/*.err
+test/evaluation/read_mapping/*/*.ind
 
 test/evaluation/*/*/slurm*
 test/evaluation/*/*slurm*
@@ -79,6 +81,8 @@ test/eval/*.summary
 test/*.time
 test/*.idx
 src/*.o
+
+build/
 
 extern/pod5*
 

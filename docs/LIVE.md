@@ -2,9 +2,9 @@
 
 ## Overview
 
-RawHash2 now supports **real-time signal streaming** from Oxford Nanopore's MinKNOW sequencing control software via gRPC. This enables selective sequencing workflows where mapping decisions are made in real-time as reads are being sequenced.
+RawHash2 supports **real-time signal streaming** from Oxford Nanopore's MinKNOW sequencing control software via gRPC. This enables selective sequencing workflows where mapping decisions are made in real-time as reads are being sequenced.
 
-**Current Status:** Beta version with **incremental chunk processing** and **decision feedback**. Tested and validated with the Icarust simulator. Real MinKNOW integration is straightforward but has not been tested on physical hardware.
+**Current Status:** Beta version with **incremental chunk processing** and **decision feedback**. Tested and validated with the [Icarust](https://github.com/LooseLab/Icarust) simulator. Real MinKNOW integration is straightforward but has not been tested on physical hardware.
 
 **Key features:**
 - **Incremental processing**: Each gRPC chunk is processed as it arrives (not accumulated then dispatched), enabling early mapping decisions
@@ -44,16 +44,16 @@ brew install grpc
 
 This installs gRPC 1.60+, protobuf, abseil, c-ares, re2, and CMake will auto-detect it.
 
-**Linux (via Conda - Recommended):**
+**Linux (via Conda):**
 
-Create a dedicated conda environment for RawHash2 development with gRPC:
+Create a conda environment for RawHash2 with gRPC:
 
 ```bash
 conda create -n rawhash2-live cmake cxx-compiler make grpcio grpcio-tools libgrpc protobuf
 conda activate rawhash2-live
 ```
 
-This single command installs:
+This installs:
 - CMake (>3.16 required)
 - C/C++ compiler
 - GNU Make
@@ -125,7 +125,7 @@ This may take 5-10 minutes on first build.
 
 ## Running Your First Live Mapping Test
 
-### Quick Start (5 minutes)
+### Quick Start
 
 **Terminal 1: Build index**
 
@@ -144,7 +144,7 @@ Icarust must run from its own directory (to find `static/` kmer models) and need
 
 ```bash
 # Create config.ini (adjust cert-dir path to your Icarust location)
-cat > /tmp/icarust_config.ini <<EOF
+cat > icarust_config.ini <<EOF
 [TLS]
 cert-dir = /path/to/Icarust/static/tls_certs/
 
@@ -158,10 +158,13 @@ EOF
 
 # Run Icarust from its directory
 cd /path/to/Icarust
-./target/release/icarust -s /path/to/RawHash2/docs/live/example_config.toml -c /tmp/icarust_config.ini
+./target/release/icarust -s /path/to/RawHash2/docs/live/example_config.toml -c /path/to/icarust_config.ini
 ```
 
-**Note:** The simulation profile TOML must use absolute paths for `input_genome`. The `test_live.sh` script handles all this automatically.
+**Important notes:**
+- The simulation profile TOML must use **absolute paths** for `input_genome`.
+- Icarust may take 10-15 seconds to fully initialize before it accepts gRPC connections.
+- If Icarust crashes immediately, see [Troubleshooting](#troubleshooting) below.
 
 **Terminal 3: Run RawHash2 in live mode**
 
@@ -177,10 +180,10 @@ Icarust uses TLS by default, so `--live-tls` and `--live-tls-cert` are required.
 **Terminal 4: Monitor results (optional)**
 
 ```bash
-tail -f /path/to/RawHash2/live_output.paf
+tail -f live_output.paf
 ```
 
-**Stop:** After Icarust finishes (usually ~60 seconds) or press Ctrl+C in terminal 3.
+**Stop:** After Icarust finishes or press Ctrl+C in terminal 3.
 
 ### Verify Results
 
@@ -191,11 +194,6 @@ grep -v "^#" live_output.paf | wc -l
 # Check mapping quality (MAPQ column)
 awk '{print $12}' live_output.paf | sort -n | uniq -c | sort -rn | head -10
 ```
-
-Expected results (60-second test):
-- ~1000 unique reads
-- ~98% mapped (since Icarust generates idealized signal)
-- MAPQ distribution: 79% at MAPQ=60 (maximum quality)
 
 ---
 
@@ -214,7 +212,13 @@ The script:
 4. Runs live mapping
 5. Cleans up and reports results
 
-Results saved to `/tmp/live_test.paf`.
+You can customize the test via environment variables:
+
+```bash
+ICARUST_DIR=/path/to/Icarust LIVE_DURATION=60 CHANNELS=512 bash docs/live/test_live.sh
+```
+
+Results are saved to `${TMPDIR:-/tmp}/rawhash2_live_test/`.
 
 ---
 
@@ -248,7 +252,7 @@ bin/rawhash2 --live --live-port 10001 -t 4 ref.idx
 bin/rawhash2 --live --live-duration 30 -t 4 ref.idx
 ```
 
-**With TLS (for real MinKNOW):**
+**With TLS (for real MinKNOW or Icarust):**
 ```bash
 bin/rawhash2 --live --live-tls --live-tls-cert /path/to/ca.crt -t 4 ref.idx
 ```
@@ -268,14 +272,14 @@ In debug mode, PAF output is not produced, but stderr contains chunk metadata (c
 
 Icarust simulates nanopore sequencing by:
 1. Generating idealized kmer-level pore current (pA values) from a reference genome using an R10/R9 pore model
-2. Converting pA → i16 (picoampere integer, 16-bit signed) using calibration constants
+2. Converting pA to i16 (picoampere integer, 16-bit signed) using calibration constants
 3. Sending i16 bytes via gRPC
 
 **R10 Calibration Constants:**
 - Offset: -243.0 pA
 - Scale: 0.14620706 pA/unit
 
-**Example conversion (i16 → pA):**
+**Example conversion (i16 to pA):**
 ```
 pA_value = (i16_raw + (-243.0)) * 0.14620706
 ```
@@ -284,11 +288,11 @@ pA_value = (i16_raw + (-243.0)) * 0.14620706
 
 RawHash2 automatically:
 1. **Detects format**: Checks if incoming data is i16 or float32 (based on byte size vs. chunk length)
-2. **Converts i16 → pA**: Applies Icarust's R10 calibration if i16 detected
+2. **Converts i16 to pA**: Applies Icarust's R10 calibration if i16 detected
 3. **Normalizes**: Applies z-score normalization (via `normalize_signal()`) to center around 0 with unit variance
 4. **Event detection**: Performs level-crossing analysis to find signal transitions
 
-Expected pA range for R10: 50–150 pA (before normalization).
+Expected pA range for R10: 50-150 pA (before normalization).
 
 ### Troubleshooting Signal Issues
 
@@ -300,8 +304,8 @@ bin/rawhash2 --live --live-debug --live-port 10001 ref.idx 2>&1 | head -20
 ```
 
 Debug output includes sample min/max values. If values look like:
-- **~0–10000**: likely i16 format (correct for Icarust)
-- **~0–1 or ~-3 to +3**: likely pre-normalized float32
+- **~0-10000**: likely i16 format (correct for Icarust)
+- **~0-1 or ~-3 to +3**: likely pre-normalized float32
 
 If format mismatch, check Icarust configuration (pore_type, reference validity).
 
@@ -318,7 +322,8 @@ Error: Failed to connect to localhost:10001
 **Solutions:**
 1. Verify Icarust is running: `ps aux | grep icarust`
 2. Check port is not blocked: `netstat -tlnp | grep 10001` (Linux) or `lsof -i :10001` (macOS)
-3. Verify gRPC server is listening in Icarust output
+3. Ensure Icarust has finished initializing (wait 10-15 seconds after startup)
+4. Verify gRPC server is listening in Icarust output
 
 ### Issue: gRPC Not Found During Build
 
@@ -334,13 +339,13 @@ CMake Error: Could not find gRPC
   make cmake CMAKE_OPTS="-DENABLE_GRPC=ON -DCMAKE_PREFIX_PATH=$CONDA_PREFIX"
   ```
 
-### Issue: TLS Verification Failed
+### Issue: TLS Certificate Verification Failed
 
 ```
 Error: certificate verify failed: unable to get local issuer certificate
 ```
 
-**For Icarust:** Icarust uses TLS with self-signed certs. Use the CA cert from Icarust's `static/tls_certs/` directory:
+**For Icarust:** Icarust uses TLS with self-signed certificates. Use the CA cert from Icarust's `static/tls_certs/` directory:
 ```bash
 bin/rawhash2 --live --live-tls --live-tls-cert /path/to/Icarust/static/tls_certs/ca.crt ...
 ```
@@ -352,7 +357,75 @@ bin/rawhash2 --live --live-tls --live-tls-cert /path/to/ca.crt ...
 
 Verify certificate is readable:
 ```bash
-openssl verify /path/to/ca.crt
+openssl x509 -in /path/to/ca.crt -noout -dates
+```
+
+### Issue: TLS Certificates Expired
+
+Icarust ships with self-signed TLS certificates in `static/tls_certs/` that may be expired. If you see errors like:
+
+```
+Handshake failed with fatal error SSL_ERROR_SSL: error:0A000086:SSL routines::certificate verify failed
+```
+
+Check expiration:
+```bash
+openssl x509 -in /path/to/Icarust/static/tls_certs/server.crt -noout -dates
+```
+
+If expired, regenerate the certificates:
+```bash
+cd /path/to/Icarust/static/tls_certs/
+
+# 1. Generate new CA key and certificate (valid 10 years)
+openssl req -x509 -newkey rsa:4096 -keyout ca.key -out ca.crt \
+  -days 3650 -nodes -subj "/CN=IcarustCA"
+
+# 2. Generate server key and CSR
+openssl req -newkey rsa:4096 -keyout server.key -out server.csr \
+  -nodes -subj "/CN=localhost"
+
+# 3. Create extensions file for SAN (Subject Alternative Name)
+cat > server_ext.cnf <<EOF
+[v3_req]
+subjectAltName = DNS:localhost, IP:127.0.0.1
+EOF
+
+# 4. Sign server certificate with the CA (valid 10 years)
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+  -CAcreateserial -out server.crt -days 3650 \
+  -extfile server_ext.cnf -extensions v3_req
+
+# 5. Clean up temporary files
+rm -f server.csr server_ext.cnf ca.srl
+```
+
+After regeneration, the `ca.crt` file is what you pass to RawHash2 via `--live-tls-cert`.
+
+### Issue: Icarust Crashes with InvalidProbability
+
+If Icarust panics at startup with an error like:
+
+```
+thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: InvalidProbability'
+```
+
+This happens when `death_chance` exceeds 1.0, computed internally as:
+```
+death_chance = (global_mean_read_length * channels) / target_yield
+```
+
+**Solution:** Increase `target_yield` in your simulation TOML so the computed value stays below 1.0. For example, with `channels = 3000` and `global_mean_read_length = 8000`:
+```toml
+# target_yield must be > global_mean_read_length * channels
+# 8000 * 3000 = 24,000,000, so use at least 100M
+target_yield = 100000000
+```
+
+Alternatively, reduce the number of channels in `config.ini`:
+```ini
+[SEQUENCER]
+channels = 512
 ```
 
 ### Issue: Hanging on Shutdown
@@ -371,7 +444,7 @@ openssl verify /path/to/ca.crt
 ### Issue: All Reads Unmapped (0% mapping rate)
 
 **Possible causes:**
-1. **Wrong pore model**: Ensure R10 index and signal are both R10
+1. **Wrong pore model**: Ensure R10 index and signal are both R10 (or both R9)
 2. **Signal format mismatch**: Use `--live-debug` to inspect signal ranges
 3. **Index build issue**: Rebuild index and verify reference FASTA is valid
 
@@ -398,50 +471,13 @@ For long runs with many channels, signal buffers can grow large.
 
 ---
 
-## Performance Characteristics
-
-### Throughput
-
-Single-threaded: ~30 reads/minute
-
-Multi-threaded (scales linearly):
-```bash
--t 2: ~60 reads/minute
--t 4: ~120 reads/minute
--t 8: ~240 reads/minute
-```
-
-### Latency
-
-With incremental chunk processing, mapping decisions are made DURING the read — typically after 2-3 chunks (each chunk = 4000 samples = 1 second at 4 kHz):
-- Most reads map in **2 chunks** (~0.4 sec mapping time)
-- Some reads need 3-7 chunks (~0.8–2.4 sec)
-- Decision + unblock is sent immediately upon mapping
-
-### Quality Metrics (Icarust R10 test)
-
-20-second test on E. coli (10 channels, 22 reads):
-- **Mapped rate**: 100% (22/22 mapped)
-- **MAPQ distribution**: 45% at MAPQ=60 (maximum quality)
-- **Chunks to map**: 50% at 2 chunks, 27% at 3 chunks
-- **Unblock actions**: sent for all mapped reads
-
-Note: These numbers are for Icarust (idealized signal). Real MinKNOW signal will have lower accuracy due to basecalling noise, chimeric reads, etc.
-
-### Resource Usage
-
-Per-channel memory: ~50 KB (mapping state + signal buffer)
-CPU: Single-threaded, sequential per-channel processing. Scales via channel count.
-
----
-
 ## Understanding the Icarust Configuration
 
 Edit `docs/live/example_config.toml` to customize Icarust behavior:
 
 ```toml
-output_path = "/tmp/icarust_test/"      # Where to write POD5 output
-target_yield = 10000000                 # Total bases to sequence (10M = quicker test)
+output_path = "/tmp/icarust_test/"      # Where to write output (fast5 files)
+target_yield = 100000000                # Total bases to sequence
 global_mean_read_length = 8000          # Average read length
 pore_type = "R10"                       # R10 or R9 (must match index)
 nucleotide_type = "DNA"                 # DNA or RNA
@@ -453,15 +489,16 @@ experiment_duration_set = 60            # How long to run (seconds)
 
 [[sample]]
 name = "E_coli_CFT073"
-input_genome = "./test/data/d9_ecoli_r1041/ref.fa"  # FASTA reference
+input_genome = "/absolute/path/to/ref.fa"  # MUST be an absolute path
 mean_read_length = 8000                 # This sample's mean read length
 weight = 1                              # Probability weight (1.0 = always)
 ```
 
-**Tips:**
-- Increase `target_yield` for longer tests: `target_yield = 100000000` (100M bases ≈ 3–5 min)
-- Increase `experiment_duration_set` to 300 for 5-minute tests
-- Change `pore_type = "R9"` to test R9.4.1 model (requires R9 index + pre-computed squiggle)
+**Important notes:**
+- `target_yield` must be greater than `global_mean_read_length * channels` (from `config.ini`), otherwise Icarust will crash with an `InvalidProbability` error. A safe default is 100M.
+- `input_genome` must be an **absolute path**. Relative paths resolve from the Icarust binary's working directory, which may not be what you expect.
+- Increase `experiment_duration_set` to 300 for 5-minute tests.
+- Change `pore_type = "R9"` to test R9.4.1 model (requires R9 index).
 
 ---
 
