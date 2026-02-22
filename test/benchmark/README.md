@@ -17,7 +17,8 @@ benchmark/
     ├── 3_run_dorado.sh            Basecall with Dorado (GPU or CPU)
     ├── 4_run_minimap2.sh          Generate ground-truth PAF with minimap2
     ├── 5_run_rawhash2_baseline.sh  v0 baseline: index + map + evaluate vs minimap2
-    └── 6_run_rawhash2_eval.sh     Iterative run: index + map + compare vs any PAF
+    ├── 6_run_rawhash2_eval.sh     Iterative run: index + map + compare vs any PAF
+    └── 6.1_run_rawhash2_eval_noindex.sh  Same as 6, but skips indexing (reuses pre-built .ind)
 ```
 
 Each script is self-contained and accepts all paths as arguments — no
@@ -36,9 +37,9 @@ conda environment with the required packages installed.
 | `dorado`   | Script 3 (basecalling)           | 0.9.2       |
 | `samtools` | Script 3 (BAM → FASTA)          | 1.10        |
 | `minimap2` | Script 4 (ground-truth mapping)  | 2.24        |
-| `rawhash2` | Scripts 5 and 6 (signal mapping) | 2.0         |
-| `python3`  | Scripts 5 and 6 (evaluation)     | 3.6         |
-| `numpy`    | Scripts 5 and 6 (pafstats.py)    | any         |
+| `rawhash2` | Scripts 5, 6, and 6.1 (signal mapping) | 2.0         |
+| `python3`  | Scripts 5, 6, and 6.1 (evaluation)     | 3.6         |
+| `numpy`    | Scripts 5, 6, and 6.1 (pafstats.py)    | any         |
 
 ### Quick install (conda)
 
@@ -58,7 +59,7 @@ conda install -c bioconda -c conda-forge minimap2 samtools pod5
 
 The full pipeline has six steps. Steps 1 and 2 are only needed if you do not
 already have a small POD5 dataset. Steps 3 and 4 are one-time setup per
-dataset (basecalling and ground-truth generation). Steps 5 and 6 are the
+dataset (basecalling and ground-truth generation). Steps 5 and 6/6.1 are the
 RawHash2-specific steps you will run repeatedly.
 
 ```
@@ -78,7 +79,8 @@ RawHash2-specific steps you will run repeatedly.
            │    ──[step 5]──▶  v0_baseline/  (index + paf + .results)   │
            │                                                             │
            │  Change params, re-run:                                     │
-           │    ──[step 6]──▶  eval_*/  (index + paf + .results)        │
+           │    ──[step 6]──▶   eval_*/  (rebuild index + map + eval)   │
+           │    ──[step 6.1]──▶ eval_*/  (reuse index + map + eval)    │
            │      (compare against minimap2 PAF or v0 baseline PAF)     │
            └────────────────────────────────────────────────────────────┘
 ```
@@ -304,6 +306,53 @@ bash ${SCRIPTS}/6_run_rawhash2_eval.sh \
 
 ---
 
+### Step 6.1 — Iterative evaluation (reuse existing index)
+
+Same as Step 6, but **skips the indexing step** and uses a pre-built `.ind` file
+via the `-I` flag. Use this when your experiment only changes mapping, chaining,
+or segmentation parameters — not indexing parameters.
+
+**When to use 6.1 vs 6:**
+
+| Change type | Script | Why |
+|-------------|--------|-----|
+| Mapping params (`--min-anchors`, `--min-score`, `--bw`, `--max-chunks`, ...) | **6.1** | Index unchanged |
+| Segmentation params (`--seg-window-length*`, `--seg-threshold*`, ...) | **6.1** | Index unchanged |
+| Device params (`--bp-per-sec`, `--sample-rate`, `--chunk-size`) | **6.1** | Index unchanged |
+| External files (`--peaks-file`, `--events-file`, `--moves-file`) | **6.1** | Index unchanged |
+| Indexing params (`-w`, `-k`, `-e`, `-q`, `--sig-diff`, `-x preset`, `--r10`) | **6** | Must rebuild index |
+| Different pore model (`-p`) | **6** | Must rebuild index |
+
+**Example A — test --min-anchors 5, reuse v0 baseline index:**
+```bash
+bash ${SCRIPTS}/6.1_run_rawhash2_eval_noindex.sh \
+  -b ${RH2} \
+  -i ${DATA}/small_pod5_files \
+  -I ${DATA}/v0_baseline/rawhash2_baseline.ind \
+  -g ${DATA}/minimap2_small/true_mappings.paf \
+  -o ${DATA}/eval_min_anchors_5 \
+  -x sensitive --r10 \
+  -e "--min-anchors 5" -n rawhash2_min_anchors_5 -t 8
+```
+
+**Example B — same experiment compared against v0 baseline PAF:**
+```bash
+bash ${SCRIPTS}/6.1_run_rawhash2_eval_noindex.sh \
+  -b ${RH2} \
+  -i ${DATA}/small_pod5_files \
+  -I ${DATA}/v0_baseline/rawhash2_baseline.ind \
+  -g ${DATA}/v0_baseline/rawhash2_baseline.paf \
+  -o ${DATA}/eval_min_anchors_5_vs_v0 \
+  -x sensitive --r10 \
+  -e "--min-anchors 5" -n rawhash2_min_anchors_5_vs_v0 -t 8
+```
+
+> **Note:** The `-x` preset and `--r10` flag passed to script 6.1 must match
+> what was used when building the index. They are needed for the mapping step
+> but do not trigger re-indexing.
+
+---
+
 ## R9.4.1 Example (E. coli)
 
 ```bash
@@ -330,7 +379,8 @@ bash ${SCRIPTS}/5_run_rawhash2_baseline.sh -b ${RH2} -i ${DATA_D2}/small_pod5_fi
 | `3_run_dorado.sh` | Basecall signals | `-b dorado -m model -i pod5 -o out` | `reads.bam reads.fasta basecall.time` |
 | `4_run_minimap2.sh` | Ground-truth mapping | `-i reads.fasta -r ref.fa -o out` | `true_mappings.paf minimap2.time` |
 | `5_run_rawhash2_baseline.sh` | v0 baseline run | `-b rh2 -i pod5 -r ref -p pore -g gt_paf -o out` | `*.paf *_ann.paf *.results` |
-| `6_run_rawhash2_eval.sh` | Iterative evaluation | `-b rh2 -i pod5 -r ref -p pore -g any_paf -o out` | `*.paf *_ann.paf *.results` |
+| `6_run_rawhash2_eval.sh` | Iterative evaluation (rebuild index) | `-b rh2 -i pod5 -r ref -p pore -g any_paf -o out` | `*.ind *.paf *_ann.paf *.results` |
+| `6.1_run_rawhash2_eval_noindex.sh` | Iterative evaluation (reuse index) | `-b rh2 -i pod5 -I index.ind -g any_paf -o out` | `*.paf *_ann.paf *.results` |
 
 Run any script with `-h` for full usage information:
 ```bash
@@ -354,19 +404,19 @@ bash scripts/5_run_rawhash2_baseline.sh -h
 
 ## Output Files Reference
 
-Scripts 5 and 6 produce these output files (PREFIX defaults to `rawhash2_baseline`
-or `rawhash2_eval`):
+Scripts 5, 6, and 6.1 produce these output files (PREFIX defaults to
+`rawhash2_baseline` or `rawhash2_eval`):
 
 | File | Description |
 |------|-------------|
-| `PREFIX.ind` | RawHash2 binary index (not human-readable) |
+| `PREFIX.ind` | RawHash2 binary index — scripts 5 and 6 only (not produced by 6.1) |
 | `PREFIX.paf` | Raw mapping output in PAF format |
 | `PREFIX_ann.paf` | PAF annotated with `rf:Z:tp/fp/fn/tn/na` accuracy labels |
 | `PREFIX.throughput` | Confusion matrix rows + BP/sec speed summary |
 | `PREFIX.comparison` | Detailed per-class stats: precision, recall, F1, timing |
-| `PREFIX_index.time` | Full `/usr/bin/time -v` output for the indexing step |
+| `PREFIX_index.time` | Full `/usr/bin/time -v` output for the indexing step (scripts 5 and 6 only) |
 | `PREFIX_map.time` | Full `/usr/bin/time -v` output for the mapping step |
-| `PREFIX_index.out/err` | stdout/stderr from rawhash2 indexing |
+| `PREFIX_index.out/err` | stdout/stderr from rawhash2 indexing (scripts 5 and 6 only) |
 | `PREFIX_map.out/err` | stdout/stderr from rawhash2 mapping |
 | `PREFIX.results` | Combined file: all of the above in one place |
 
@@ -398,12 +448,15 @@ System time (seconds): 11.27
 ## Notes
 
 - All scripts are designed to run from any working directory (use absolute paths).
-- The `--r10` flag must be passed for R10.4.1 data in scripts 5 and 6. For R9.4.1
-  data, omit it.
+- The `--r10` flag must be passed for R10.4.1 data in scripts 5, 6, and 6.1. For
+  R9.4.1 data, omit it.
 - Scripts 1 and 2 require `pod5` on your PATH. Activate your conda environment
   before running, or install pod5 via `conda install -c conda-forge pod5`.
 - Script 3 requires `samtools` on your PATH.
-- Scripts 5 and 6 automatically find `pafstats.py` and `analyze_paf.py` at
+- Scripts 5, 6, and 6.1 automatically find `pafstats.py` and `analyze_paf.py` at
   `../../scripts/` relative to the benchmark scripts directory (i.e., `test/scripts/`).
-- The `-e` flag in scripts 5/6 accepts any extra rawhash2 parameters as a quoted
+- The `-e` flag in scripts 5/6/6.1 accepts any extra rawhash2 parameters as a quoted
   string, e.g. `-e "-w 3 --min-anchors 3"`.
+- Script 6.1 is the preferred choice for most iterative experiments since it avoids
+  redundant re-indexing. Only use script 6 when changing indexing-related parameters
+  (`-w`, `-k`, `-e events`, `-q`, `--sig-diff`, preset, `--r10`, or pore model).

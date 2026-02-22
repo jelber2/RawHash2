@@ -21,6 +21,8 @@ cd ..;
 #   basecall_config_filename in fast5: dna_r10.4_e8.1_sup.cfg
 # Dorado version: 0.9.2.
 # Model: dna_r10.4.1_e8.2_400bps_hac@v4.1.0 (specify as full filesystem path).
+# Note: dorado 0.9.2 does NOT support --disable-read-splitting, so we pass
+#       --enable-read-splitting to the benchmark script to skip that flag.
 # Requires pod5_files/ (see conversion above) and a dorado binary.
 # Using the benchmark basecalling script:
 #   SCRIPTS=/path/to/rawhash2/test/benchmark/scripts
@@ -28,8 +30,11 @@ cd ..;
 #   bash ${SCRIPTS}/3_run_dorado.sh \
 #     -b ${DORADO}/bin/dorado \
 #     -m ${DORADO}/bin/dna_r10.4.1_e8.2_400bps_hac@v4.1.0 \
-#     -i ./pod5_files -o ./dorado-0.9.2 -t 16
+#     -i ./pod5_files -o ./dorado-0.9.2 -t 16 \
+#     --enable-read-splitting
 # Output: dorado-0.9.2/reads.bam, dorado-0.9.2/reads.fasta
+# Symlink so that evaluation scripts find reads.fasta at the dataset root:
+#   ln -sf dorado-0.9.2/reads.fasta reads.fasta
 #TODO: Provide the direct link to download basecalled reads
 
 #Downloading Staphylococcus aureus subsp. aureus JKD6159, complete genome; Unzip; Change name;

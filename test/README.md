@@ -151,7 +151,7 @@ cd ./evaluation/rawsamble
 
 ## Live Streaming Evaluation (MinKNOW/Icarust)
 
-For testing RawHash2's real-time signal streaming capability via gRPC, see [../docs/LIVE.md](../docs/LIVE.md).
+For testing RawHash2's real-time signal streaming capability via gRPC, see [../live/LIVE.md](../live/LIVE.md).
 
 This evaluation uses the Icarust simulator to test live signal streaming:
 - E. coli R10 reference: 60-second test with 1027 unique reads

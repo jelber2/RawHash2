@@ -27,10 +27,13 @@
 #include "minknow_api/data.grpc.pb.h"
 #include "minknow_api/device.grpc.pb.h"
 
-/* C headers (with extern "C" linkage) */
-extern "C" {
+/* C headers — included outside extern "C" because rmap.h/rlive.h transitively
+ * pull in rsig.h → hdf5_tools.hpp (C++ templates) when ENABLE_HDF5=ON.
+ * Each header already has its own extern "C" guards where needed. */
 #include "rlive.h"
 #include "rmap.h"
+
+extern "C" {
 #include "kthread.h"
 #include "kalloc.h"
 #include "rutils.h"
@@ -81,6 +84,24 @@ typedef struct ri_channel_state_s {
 	/* For finalization (read_length reporting) */
 	uint32_t total_samples;  /* total raw samples received for this read */
 } ri_channel_state_t;
+
+/* ========================================================================
+ * Work items for parallel kt_for() dispatch over channels
+ * ======================================================================== */
+
+typedef struct live_work_item_s {
+	ri_channel_state_t *ch;
+	const float *chunk_sig;
+	uint32_t n_samples;
+	const ri_idx_t *idx;
+	const ri_mapopt_t *opt;
+	int mapped;                 /* output: return value of ri_map_one_chunk */
+} live_work_item_t;
+
+typedef struct live_kt_data_s {
+	live_work_item_t *items;
+	int n_items;
+} live_kt_data_t;
 
 static void init_channel_mapping_state(ri_channel_state_t *ch, uint32_t rid)
 {
@@ -222,6 +243,29 @@ static void ri_live_send_decision(
 		        __func__, channel_id, read_id);
 	}
 }
+
+/* ========================================================================
+ * kt_for() callback for parallel per-channel mapping
+ * ======================================================================== */
+
+extern "C" {
+static void live_map_worker(void *data, long i, int tid)
+{
+	(void)tid;
+	live_kt_data_t *ctx = (live_kt_data_t *)data;
+	live_work_item_t *w = &ctx->items[i];
+	ri_channel_state_t *ch = w->ch;
+
+	w->mapped = ri_map_one_chunk(
+		w->idx, w->opt,
+		w->chunk_sig, w->n_samples,
+		ch->reg, ch->buf,
+		&ch->mean_sum, &ch->std_dev_sum,
+		&ch->n_events_sum, ch->read_id);
+
+	ch->chunk_count++;
+}
+} /* extern "C" */
 
 /* ========================================================================
  * MinKNOW gRPC Client
@@ -412,8 +456,6 @@ extern "C" int ri_map_live(const ri_idx_t *idx,
                            const ri_live_opt_t *live_opt,
                            int n_threads)
 {
-	(void)n_threads; /* sequential per-channel processing for now */
-
 	/* Connect to MinKNOW/Icarust */
 	MinKNOWClient client(live_opt);
 	if (!client.connect()) return -1;
@@ -428,6 +470,10 @@ extern "C" int ri_map_live(const ri_idx_t *idx,
 		n_channels, sizeof(ri_channel_state_t));
 	for (uint32_t i = 0; i < n_channels; ++i)
 		channels[i].channel_id = live_opt->first_channel + i;
+
+	/* Allocate work items for parallel dispatch (reused each response) */
+	live_work_item_t *work_items = (live_work_item_t *)calloc(
+		n_channels, sizeof(live_work_item_t));
 
 	/* Fetch per-channel calibration if UNCALIBRATED mode */
 	ri_channel_cal_t *cal = NULL;
@@ -464,7 +510,9 @@ extern "C" int ri_map_live(const ri_idx_t *idx,
 	GetLiveReadsResponse response;
 	while (client.read_response(&response)) {
 		total_chunks_received++;
+		int n_work = 0;
 
+		/* ==== Phase 1 (sequential): read boundaries + signal extraction ==== */
 		for (auto &kv : response.channels()) {
 			uint32_t ch_num = kv.first;
 			const auto &read_data = kv.second;
@@ -591,17 +639,28 @@ extern "C" int ri_map_live(const ri_idx_t *idx,
 			ch->total_samples += n_new_samples;
 			ch->l_chunk_sig = n_new_samples;
 
-			/* ---- Process chunk incrementally ---- */
-			int mapped = ri_map_one_chunk(
-				idx, opt,
-				(const float *)ch->chunk_sig, n_new_samples,
-				ch->reg, ch->buf,
-				&ch->mean_sum, &ch->std_dev_sum,
-				&ch->n_events_sum, ch->read_id);
+			/* ---- Queue for parallel processing ---- */
+			live_work_item_t *w = &work_items[n_work++];
+			w->ch = ch;
+			w->chunk_sig = ch->chunk_sig;
+			w->n_samples = n_new_samples;
+			w->idx = idx;
+			w->opt = opt;
+			w->mapped = 0;
+		}
 
-			ch->chunk_count++;
+		/* ==== Phase 2 (parallel): kt_for over ri_map_one_chunk ==== */
+		if (n_work > 0) {
+			live_kt_data_t kt_data = { work_items, n_work };
+			kt_for(n_threads, live_map_worker, &kt_data, (long)n_work);
+		}
 
-			if (mapped) {
+		/* ==== Phase 3 (sequential): finalization + PAF output + decisions ==== */
+		for (int j = 0; j < n_work; ++j) {
+			live_work_item_t *w = &work_items[j];
+			ri_channel_state_t *ch = w->ch;
+
+			if (w->mapped) {
 				/* Mapping found — finalize and output */
 				double mapping_time = ri_realtime() - ch->t_start;
 				uint32_t c_count = (ch->chunk_count > 0) ? ch->chunk_count - 1 : 0;
@@ -677,6 +736,7 @@ extern "C" int ri_map_live(const ri_idx_t *idx,
 		if (channels[i].read_id) free(channels[i].read_id);
 	}
 	free(channels);
+	free(work_items);
 	if (cal) free(cal);
 
 	double total_time = ri_realtime() - t_start;

@@ -36,5 +36,7 @@ wget https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/007/445/GCA_000007445.1_AS
 #     -i ./pod5_files -o ./dorado-0.9.2 -t 16 \
 #     --enable-read-splitting
 # Output: dorado-0.9.2/reads.bam, dorado-0.9.2/reads.fasta
+# Symlink so that evaluation scripts find reads.fasta at the dataset root:
+#   ln -sf dorado-0.9.2/reads.fasta reads.fasta
 
 cd ..

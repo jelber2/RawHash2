@@ -23,6 +23,8 @@ cd ..;
 #     -m ${DORADO}/bin/dna_r10.4.1_e8.2_400bps_hac@v5.2.0 \
 #     -i ./pod5_files -o ./dorado-1.4.0 -t 16
 # Output: dorado-1.4.0/reads.bam, dorado-1.4.0/reads.fasta
+# Symlink so that evaluation scripts find reads.fasta at the dataset root:
+#   ln -sf dorado-1.4.0/reads.fasta reads.fasta
 #TODO: Provide the direct link to download basecalled reads
 
 #Downloading CHM13v2 (hs1) Human reference genome;

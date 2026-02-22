@@ -26,7 +26,7 @@ RawHash performs real-time mapping of nanopore raw signals. When the prefix of r
 
 # Recent changes
 
-* **MinKNOW gRPC real-time streaming (BETA):** Live selective sequencing via MinKNOW or Icarust simulator. See [docs/LIVE.md](docs/LIVE.md).
+* **MinKNOW gRPC real-time streaming (BETA):** Live adaptive sampling via MinKNOW, pod5 replay, or Icarust simulator. See [MinKNOW Integration and Adaptive Sampling](#minknow-integration-and-adaptive-sampling) below and the full guide at [live/LIVE.md](live/LIVE.md).
 * **Rawsamble overlapping:** All-vs-all raw signal overlapping for *de novo* assembly. See [Rawsamble section](#rawsamble-for-overlapping-and-assembly-construction).
 * **Adaptive quantization:** Dynamic bucket sizing based on signal distribution — significant accuracy and performance gains.
 * **RawAlign DTW integration:** Signal alignment via Dynamic Time Warping (experimental). See citation below.
@@ -180,41 +180,55 @@ make DEBUG=1 NOHDF5=0
 make subset
 ```
 
-## gRPC Live Streaming Support (MinKNOW/Icarust) — BETA
+## MinKNOW Integration and Adaptive Sampling
 
-RawHash2 now supports **real-time signal streaming** from Oxford Nanopore's MinKNOW software or the Icarust simulator. This enables live selective sequencing workflows where mapping decisions are made in real-time.
+RawHash2 supports **real-time adaptive sampling** from Oxford Nanopore sequencers via the MinKNOW gRPC API. Signal chunks stream in as reads are being sequenced, RawHash2 maps each chunk incrementally using multi-threaded parallel processing, and mapping decisions (keep or eject) are sent back to the sequencer.
 
-**Status:** Beta version, tested with Icarust simulator. Real MinKNOW integration ready but not yet tested on physical hardware.
+Three signal sources are supported — all use the same `--live` interface:
 
-**Building with gRPC support:**
+| Mode | Signal source | Use case |
+|------|--------------|----------|
+| **Pod5 replay** | Python replay server replays a real pod5 file over gRPC | Deterministic validation and benchmarking |
+| **Icarust** | [Icarust](https://github.com/LooseLab/Icarust) synthesizes signal from a reference | Integration testing with simulated hardware |
+| **Real MinKNOW** | Physical nanopore sequencer | Production adaptive sampling |
+
+### Building with gRPC support
 
 ```bash
-# CMake (Recommended)
+# 1. Install dependencies (Linux via conda)
+conda create -n rawhash2-live cmake make cxx-compiler grpcio grpcio-tools libgrpc protobuf
+conda activate rawhash2-live
+
+# macOS alternative: brew install grpc cmake
+
+# 2. Build
 make cmake CMAKE_OPTS="-DENABLE_GRPC=ON"
-
-# With additional format support
-make cmake CMAKE_OPTS="-DENABLE_GRPC=ON -DENABLE_HDF5=ON -DENABLE_SLOW5=ON"
 ```
 
-**Prerequisites for gRPC:**
-
-| Platform | Requirement |
-|----------|-------------|
-| macOS | `brew install grpc` |
-| Linux | `conda create -n rawhash2-live grpcio grpcio-tools libgrpc protobuf cmake` |
-
-**Quick test (requires Icarust simulator):**
+### Quick start: pod5 replay
 
 ```bash
-# Terminal 1: Start Icarust
-export HDF5_DIR=$(brew --prefix hdf5@1.10)  # macOS
-./Icarust/target/release/icarust docs/live/example_config.toml
+# Terminal 1: Start replay server
+pip install grpcio grpcio-tools pod5
+python3 pod5_replay_server.py --pod5 reads.pod5 --port 10111 --mode uncalibrated
 
-# Terminal 2: Run RawHash2 live
-bin/rawhash2 --live --live-port 10001 -t 4 ref.idx > live_output.paf
+# Terminal 2: Index (one-time) + map live
+bin/rawhash2 -x viral -p extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model \
+  -d ref.idx ref.fa
+bin/rawhash2 --live --live-port 10111 --live-uncalibrated -x viral -t 16 ref.idx > live.paf
 ```
 
-For comprehensive setup, testing, and troubleshooting instructions, see **[docs/LIVE.md](docs/LIVE.md)**.
+### Quick start: real MinKNOW
+
+```bash
+bin/rawhash2 --live \
+  --live-host sequencer01 --live-port 8004 \
+  --live-tls --live-tls-cert /opt/ont/minknow/conf/rpc-certs/ca.crt \
+  --live-last-channel 512 \
+  -x fast --r10 -t 16 ref.idx > live.paf
+```
+
+For the complete guide covering all three modes, installation, configuration, validation, threading architecture, and troubleshooting, see **[live/LIVE.md](live/LIVE.md)**.
 
 # Usage
 
@@ -380,7 +394,8 @@ Please follow the instructions in the [README](test/README.md) file in [test](./
 
 # Upcoming Features
 
-* Direct integration with MinKNOW.
+* Policy-based adaptive sampling decisions (target vs. non-target classification, abundance thresholds).
+* Sequence Until + live mode integration for real-time abundance monitoring.
 * Ability to specify even/odd channels to eject the reads only from these specified channels.
 * Please create issues if you want to see more features that can make RawHash2 easily integratable with nanopore sequencers for any use case.
 
