@@ -208,18 +208,25 @@ static inline float* gen_events(void *km,
 
 	float* events = (float*)ri_kmalloc(km, n_ev*sizeof(float));
 
-	uint32_t start_idx = 0, segment_length = 0;
+	uint32_t start_idx = 0, segment_length = 0, n_written = 0;
 
-	for (uint32_t pi = 0, i = 0; pi < peak_size && i < n_ev; pi++){
+	for (uint32_t pi = 0; pi < peak_size && n_written < n_ev; pi++){
 		if (!(peaks[pi] > 0 && peaks[pi] < s_len)) continue;
 
     	segment_length = peaks[pi] - start_idx;
 		if (segment_length >= min_seg_len && segment_length < max_seg_len)
-			events[i++] = calculate_mean_of_filtered_segment(sig + start_idx, segment_length);
+			events[n_written++] = calculate_mean_of_filtered_segment(sig + start_idx, segment_length);
 		start_idx = peaks[pi];
 	}
 
-	(*n_events) = n_ev;
+	if (n_written == 0) {
+		ri_kfree(km, events);
+		events = NULL;
+	} else if (n_written < n_ev) {
+		events = (float*)ri_krealloc(km, events, n_written * sizeof(float));
+	}
+
+	(*n_events) = n_written;
 	return events;
 }
 

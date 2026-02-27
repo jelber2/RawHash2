@@ -144,6 +144,7 @@ typedef struct ri_mapopt_s{
 	//Segment length filtering for gen_events()
 	uint32_t min_segment_length;  // minimum segment length (skip shorter segments, 0 = no min filter)
 	uint32_t max_segment_length;  // maximum segment length (skip longer segments, default 500)
+	uint32_t skip_first_events;   // number of leading events to skip (default 0; auto-set to 1 with --moves-file)
 
 	//External segmentation data (NULL = use internal event detection)
 	void *ext_peaks;	// ri_ext_peaks_t* (opaque handle, loaded from --peaks-file)

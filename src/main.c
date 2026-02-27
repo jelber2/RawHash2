@@ -103,6 +103,7 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"live-no-sig-filter",	ko_no_argument,       	386 },
 	{ (char*)"live-uncalibrated",	ko_no_argument,       	387 },
 #endif
+	{ (char*)"skip-first-events",	ko_required_argument, 	388 },
 	{ 0, 0, 0 }
 };
 
@@ -299,13 +300,16 @@ int main(int argc, char *argv[])
 	ri_live_opt_init(&live_opt);
 #endif
 
-	// test command line options and apply option -x/preset first
+	// first pass: apply presets (-x) and context-dependent defaults (--moves-file)
 	while ((c = ketopt(&o, argc, argv, 1, opt_str, long_options)) >= 0) {
 		if (c == 'x') {
 			if (ri_set_opt(o.arg, &ipt, &opt) < 0) {
 				fprintf(stderr, "[ERROR] unknown preset '%s'\n", o.arg);
 				return 1;
 			}
+		} else if (c == 374) { // --moves-file: auto-set defaults (user can override in second pass)
+			opt.skip_first_events = 1;
+			ipt.diff = 0.0f; // sig-diff=0 gives best accuracy with move tables
 		} else if (c == ':') {
 			fprintf(stderr, "[ERROR] missing option argument\n");
 			return 1;
@@ -469,6 +473,7 @@ int main(int argc, char *argv[])
 		else if (c == 386) live_opt.no_sig_filter = 1; // --live-no-sig-filter
 		else if (c == 387) live_opt.uncalibrated = 1; // --live-uncalibrated
 #endif
+		else if (c == 388) opt.skip_first_events = (uint32_t)atoi(o.arg); // --skip-first-events
 		else if (c == 'V') {puts(RH_VERSION); return 0;}
 	}
 
@@ -495,7 +500,7 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -e INT       events per hash value [%d]. Also applies during mapping\n", ipt.e);
 		fprintf(fp_help, "    -q INT       quantization bits [%d]. Creates 2^INT buckets\n", ipt.q);
 		fprintf(fp_help, "    -w INT       minimizer window size [%d]. >0 enables minimizer seeding (faster, less accurate)\n", ipt.w);
-		fprintf(fp_help, "    --sig-diff FLOAT   min difference between consecutive events for hashing [%g]\n", ipt.diff);
+		fprintf(fp_help, "    --sig-diff FLOAT   min difference between consecutive events for hashing [%g] (auto-set to 0 with --moves-file)\n", ipt.diff);
 		fprintf(fp_help, "    --store-sig  store reference signal in index (required for DTW alignment)\n");
 		fprintf(fp_help, "    --sig-target reference contains signal values instead of bases (for overlapping)\n");
 
@@ -560,6 +565,7 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "                        Converts move boundaries to segmentation peaks.\n");
 		fprintf(fp_help, "                        Format: read_id<TAB>mv:B:c,STRIDE,0,1,...<TAB>ts:i:OFFSET\n");
 		fprintf(fp_help, "                        Use test/scripts/extract_moves_from_bam.sh to generate this file.\n");
+		fprintf(fp_help, "    --skip-first-events INT  skip the first INT events [%u] (auto-set to 1 with --moves-file)\n", opt.skip_first_events);
 		fprintf(fp_help, "    Note: --peaks-file, --events-file, and --moves-file are mutually exclusive.\n");
 
 		fprintf(fp_help, "\n  Sequence Until (real-time abundance estimation):\n");

@@ -133,6 +133,7 @@ void ri_mapopt_init(ri_mapopt_t *opt)
 	//Segment length filtering for gen_events
 	opt->min_segment_length = 0;   // no minimum by default (backward compatible)
 	opt->max_segment_length = 500; // existing behavior
+	opt->skip_first_events = 0; // number of leading events to skip (0 = none)
 
 	//Sequence until parameters
 	opt->t_threshold = 1.5f; //--threshold

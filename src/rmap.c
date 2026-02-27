@@ -287,14 +287,50 @@ void ri_map_frag(const ri_idx_t *ri,
 		events = (float*)ri_kmalloc(b->km, n_events * sizeof(float));
 		memcpy(events, ext_ev->events, n_events * sizeof(float));
 	} else if (ext_pk) {
-		/* External peaks: normalize signal, remap indices, run gen_events */
-		events = detect_events_with_ext_peaks(b->km, s_len, sig,
-			ext_pk->peaks, ext_pk->n_peaks,
+		/* External peaks: normalize signal, remap indices, run gen_events.
+		 * When skip_first_events > 0 (default 1 for --moves-file), trim the
+		 * signal at peaks[N-1] so the first N events (e.g., adapter region)
+		 * are excluded from normalization and event generation entirely. */
+		const float *pk_sig = sig;
+		uint32_t pk_s_len = s_len;
+		const uint32_t *pk_peaks = ext_pk->peaks;
+		uint32_t pk_n_peaks = ext_pk->n_peaks;
+		uint32_t *adj_peaks = NULL;
+		uint32_t skip_n = opt->skip_first_events;
+
+		if (skip_n > 0 && skip_n <= pk_n_peaks) {
+			/* The first skip_n peaks define skip_n events to discard.
+			 * Trim signal at peaks[skip_n - 1] and adjust remaining peaks. */
+			uint32_t trim_peak_idx = skip_n - 1;
+			if (ext_pk->peaks[trim_peak_idx] > 0 && ext_pk->peaks[trim_peak_idx] < s_len) {
+				uint32_t trim_offset = ext_pk->peaks[trim_peak_idx];
+				pk_sig = sig + trim_offset;
+				pk_s_len = s_len - trim_offset;
+				pk_n_peaks = ext_pk->n_peaks - skip_n;
+				if (pk_n_peaks > 0) {
+					adj_peaks = (uint32_t*)ri_kmalloc(b->km, pk_n_peaks * sizeof(uint32_t));
+					for (uint32_t i = 0; i < pk_n_peaks; i++)
+						adj_peaks[i] = ext_pk->peaks[i + skip_n] - trim_offset;
+					pk_peaks = adj_peaks;
+				}
+			}
+		}
+
+		events = detect_events_with_ext_peaks(b->km, pk_s_len, pk_sig,
+			pk_peaks, pk_n_peaks,
 			opt->min_segment_length, opt->max_segment_length,
 			mean_sum, std_dev_sum, n_events_sum, &n_events);
+
+		if (adj_peaks) ri_kfree(b->km, adj_peaks);
 	} else {
-		/* Default: full t-test event detection */
+		/* Default: full t-test event detection.
+		 * For non-ext_pk paths, skip_first_events is applied after generation. */
 		events = detect_events(b->km, s_len, sig, opt->window_length1, opt->window_length2, opt->threshold1, opt->threshold2, opt->peak_height, opt->min_segment_length, opt->max_segment_length, mean_sum, std_dev_sum, n_events_sum, &n_events);
+		if (events && opt->skip_first_events > 0 && opt->skip_first_events < n_events) {
+			uint32_t skip_n = opt->skip_first_events;
+			n_events -= skip_n;
+			memmove(events, events + skip_n, n_events * sizeof(float));
+		}
 	}
 
 	#ifdef PROFILERH
