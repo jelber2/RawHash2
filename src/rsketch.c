@@ -27,26 +27,20 @@ uint32_t dynamic_quantize(float signal,
 	float coarse_coef1 = (1-fine_range)/2;
 	float coarse_coef2 = fine_range + coarse_coef1;
 
-    // Normalize the signal to [0, 1]
     float normalized = (signal - minVal) / range;
 
 	float a = (fine_min - minVal) / range;
 	float b = (fine_max - minVal) / range;
 
-    // Conditional quantization based on the segment
     float quantized = fine_max;
     if (signal >= fine_min && signal <= fine_max) {
-        // Within [fine_min, fine_max], map to a sub-range [a, b] in [0, 1],
-		//then scale to [0, fine_range] for finer granularity
         quantized = fine_range * ((normalized - a) / (b - a));
     }
 	else {
-        // Outside [fine_min, fine_max], split the rest of [0, 1] into two and map accordingly
-        if (normalized < 0.5) quantized = fine_range + coarse_coef1 * normalized; // Coarser granularity
-        else quantized = coarse_coef2 + coarse_coef1 * normalized; // Coarser granularity
+        if (normalized < 0.5) quantized = fine_range + coarse_coef1 * normalized;
+        else quantized = coarse_coef2 + coarse_coef1 * normalized;
     }
 
-    // Map the quantized value back to the range [0, 2^n_buckets - 1]
     uint32_t quantizedValue = (uint32_t)(quantized * (n_buckets-1));
 
     return quantizedValue;
@@ -57,7 +51,7 @@ void ri_sketch_min(void *km,
 				   uint32_t id,
 				   int strand,
 				   uint32_t len,
-				   float diff,
+				   int diff,
 				   int w,
 				   int e,
 				   uint32_t quant_bit,
@@ -91,14 +85,22 @@ void ri_sketch_min(void *km,
 	mm128_t sigBuf[e];
 	memset(sigBuf, 0, e*sizeof(mm128_t));
 
+	uint32_t prev_quant_for_diff = UINT32_MAX;
+
     for (f_pos = l = buf_pos = min_pos = 0; f_pos < len; ++f_pos) {
-        if(f_pos > 0 && fabs(s_values[f_pos] - s_values[l_sigpos]) < diff) continue;
+		f_tmpQuantSignal = dynamic_quantize(s_values[f_pos], fine_min, fine_max, fine_range, n_buckets)&mask_quant_bit;
+
+		/* Quantized sig-diff: skip if |quant_diff| <= diff. diff=-1 disables filtering. */
+		if(f_pos > 0 && diff >= 0) {
+			int qdiff = (int)f_tmpQuantSignal - (int)prev_quant_for_diff;
+			if(qdiff < 0) qdiff = -qdiff;
+			if(qdiff <= diff) continue;
+		}
 
 		l++;
 		mm128_t info = { UINT64_MAX, UINT64_MAX };
 		l_sigpos = f_pos;
-
-		f_tmpQuantSignal = dynamic_quantize(s_values[f_pos], fine_min, fine_max, fine_range, n_buckets)&mask_quant_bit;
+		prev_quant_for_diff = f_tmpQuantSignal;
 
 		quantVal = (quantVal<<quant_bit|f_tmpQuantSignal)&mask_events;
 
@@ -145,7 +147,7 @@ void ri_sketch_reg(void *km,
 				   uint32_t id,
 				   int strand,
 				   uint32_t len,
-				   float diff,
+				   int diff,
 				   int e,
 				   uint32_t quant_bit,
 				   int k,
@@ -176,6 +178,7 @@ void ri_sketch_reg(void *km,
 	//First quantization is done here
 	l_sigpos = f_pos;
 	f_tmpQuantSignal = dynamic_quantize(s_values[f_pos], fine_min, fine_max, fine_range, n_buckets)&mask_quant_bit;
+	uint32_t prev_quant_for_diff = f_tmpQuantSignal;
 	if(out) fprintf(stdout, "%u", f_tmpQuantSignal);
 	sigBuf[sigBufPos].y = id_shift | (uint32_t)f_pos<<RI_POS_SHIFT | strand;
 	if(++sigBufPos == e) {sigBufFull = 1; sigBufPos = 0;}
@@ -184,11 +187,17 @@ void ri_sketch_reg(void *km,
 	if(sigBufFull && !out) rh_kv_push(mm128_t, km, *p, sigBuf[sigBufPos]);
 
     for (f_pos = 1; f_pos < len; ++f_pos) {
-        if((fabs(s_values[f_pos] - s_values[l_sigpos]) < diff)) continue;
+		f_tmpQuantSignal = dynamic_quantize(s_values[f_pos], fine_min, fine_max, fine_range, n_buckets)&mask_quant_bit;
+
+		/* Quantized sig-diff: skip if |quant_diff| <= diff. diff=-1 disables filtering. */
+		if(diff >= 0) {
+			int qdiff = (int)f_tmpQuantSignal - (int)prev_quant_for_diff;
+			if(qdiff < 0) qdiff = -qdiff;
+			if(qdiff <= diff) continue;
+		}
 
 		l_sigpos = f_pos;
-
-		f_tmpQuantSignal = dynamic_quantize(s_values[f_pos], fine_min, fine_max, fine_range, n_buckets)&mask_quant_bit;
+		prev_quant_for_diff = f_tmpQuantSignal;
 		if(out) fprintf(stdout, ",%u", f_tmpQuantSignal);
 
 		sigBuf[sigBufPos].y = id_shift | (uint32_t)f_pos<<RI_POS_SHIFT | strand;
@@ -196,7 +205,7 @@ void ri_sketch_reg(void *km,
 
 		quantVal = (quantVal<<quant_bit|f_tmpQuantSignal)&mask_events;
 		sigBuf[sigBufPos].x = (hash64(quantVal, mask)<<RI_HASH_SHIFT) | span;
-		
+
 		if(!sigBufFull) continue;
 
 		if(!out)rh_kv_push(mm128_t, km, *p, sigBuf[sigBufPos]);
@@ -208,7 +217,7 @@ void ri_sketch_reg_rev(void *km,
 					   uint32_t id,
 					   int strand,
 					   uint32_t len,
-					   float diff,
+					   int diff,
 					   int e,
 					   uint32_t quant_bit,
 					   int k,
@@ -246,11 +255,17 @@ void ri_sketch_reg_rev(void *km,
 	if(sigBufFull && !out && streak >= e) rh_kv_push(mm128_t, km, *p, sigBuf[sigBufPos]);
 
     for (f_pos = 1; f_pos < len; ++f_pos) {
-        if(streak > 0 && (fabs(s_values[f_pos] - s_values[l_sigpos]) < diff)) {streak = 0; continue;}
+		f_tmpQuantSignal = dynamic_quantize(s_values[f_pos], fine_min, fine_max, fine_range, n_buckets)&mask_quant_bit;
+
+		/* Quantized sig-diff: skip if |quant_diff| <= diff. diff=-1 disables filtering. */
+		if(diff >= 0) {
+			uint32_t prev_q = dynamic_quantize(s_values[l_sigpos], fine_min, fine_max, fine_range, n_buckets)&mask_quant_bit;
+			int qdiff = (int)f_tmpQuantSignal - (int)prev_q;
+			if(qdiff < 0) qdiff = -qdiff;
+			if(qdiff <= diff) {streak = 0; continue;}
+		}
 
 		l_sigpos = f_pos;
-
-		f_tmpQuantSignal = dynamic_quantize(s_values[f_pos], fine_min, fine_max, fine_range, n_buckets)&mask_quant_bit;
 		if(out) fprintf(stdout, ",%u", f_tmpQuantSignal);
 
 		// sigBuf[sigBufPos].y = id_shift | ((uint32_t)(len-f_pos-1))<<RI_POS_SHIFT | strand;
@@ -273,7 +288,7 @@ void ri_sketch(void *km,
                uint32_t id,
                int strand,
                uint32_t len,
-               float diff,
+               int diff,
                int w,
                int e,
                int n,
@@ -294,7 +309,7 @@ void ri_sketch_rev(void *km,
 				   uint32_t id,
 				   int strand,
 				   uint32_t len,
-				   float diff,
+				   int diff,
 				   int w,
 				   int e,
 				   int n,

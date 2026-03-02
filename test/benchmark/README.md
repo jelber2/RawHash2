@@ -14,11 +14,12 @@ benchmark/
 └── scripts/
     ├── 1_fast5_to_pod5.sh         Convert fast5 → pod5
     ├── 2_create_small_pod5.sh     Subset pod5 to N reads
-    ├── 3_run_dorado.sh            Basecall with Dorado (GPU or CPU)
-    ├── 4_run_minimap2.sh          Generate ground-truth PAF with minimap2
+    ├── 3_run_dorado.sh            Basecall with Dorado (GPU or CPU, ± reference)
+    ├── 4_run_minimap2.sh          Generate minimap2 PAF from basecalled reads
     ├── 5_run_rawhash2_baseline.sh  v0 baseline: index + map + evaluate vs minimap2
     ├── 6_run_rawhash2_eval.sh     Iterative run: index + map + compare vs any PAF
-    └── 6.1_run_rawhash2_eval_noindex.sh  Same as 6, but skips indexing (reuses pre-built .ind)
+    ├── 6.1_run_rawhash2_eval_noindex.sh  Same as 6, but skips indexing (reuses pre-built .ind)
+    └── 7_refine_moves_remora.sh   Refine move tables using Remora signal mapping
 ```
 
 Each script is self-contained and accepts all paths as arguments — no
@@ -36,10 +37,11 @@ conda environment with the required packages installed.
 | `pod5`     | Scripts 1 and 2 (POD5 I/O)      | 0.3         |
 | `dorado`   | Script 3 (basecalling)           | 0.9.2       |
 | `samtools` | Script 3 (BAM → FASTA)          | 1.10        |
-| `minimap2` | Script 4 (ground-truth mapping)  | 2.24        |
+| `minimap2` | Script 4 (minimap2 PAF generation) | 2.24      |
 | `rawhash2` | Scripts 5, 6, and 6.1 (signal mapping) | 2.0         |
-| `python3`  | Scripts 5, 6, and 6.1 (evaluation)     | 3.6         |
+| `python3`  | Scripts 5, 6, 6.1, and 7 (evaluation + refinement) | 3.6 |
 | `numpy`    | Scripts 5, 6, and 6.1 (pafstats.py)    | any         |
+| `ont-remora`| Script 7 (signal refinement)    | 3.3.0       |
 
 ### Quick install (conda)
 
@@ -53,14 +55,30 @@ conda install -c bioconda -c conda-forge minimap2 samtools pod5
 > respective repositories). Make sure they are on your PATH before running
 > these scripts, or pass their paths explicitly via the `-b` flag.
 
+> **Script 7 (Remora refinement)** requires a separate conda environment
+> (`remora-env`) due to numpy version conflicts:
+> ```bash
+> conda create -n remora-env python=3.10
+> conda activate remora-env
+> pip install ont-remora>=3.3.0 pod5 pysam tqdm
+> ```
+
 ---
 
 ## Typical Workflow
 
-The full pipeline has six steps. Steps 1 and 2 are only needed if you do not
-already have a small POD5 dataset. Steps 3 and 4 are one-time setup per
-dataset (basecalling and ground-truth generation). Steps 5 and 6/6.1 are the
-RawHash2-specific steps you will run repeatedly.
+There are two pipelines:
+
+**Pipeline A — Standard (steps 1–6):** Basecall reads, map with minimap2 as
+reference, then evaluate RawHash2 signal mapping accuracy. Uses unaligned
+basecalling (step 3 without `-r`).
+
+**Pipeline B — Refinement (steps 1–4, 7, 6):** Basecall reads with reference
+alignment (step 3 with `-r`), refine the signal-to-base mapping using Remora
+(step 7), and evaluate with the refined peaks file. Produces higher-quality
+ground truth segmentation.
+
+Steps 1–2 are only needed if you don't already have a small POD5 dataset.
 
 ```
            ┌────────────────────────────────────────────────────────────┐
@@ -68,20 +86,30 @@ RawHash2-specific steps you will run repeatedly.
            │                                                             │
            │  fast5_files/  ──[step 1]──▶  pod5_files/                 │
            │  pod5_files/   ──[step 2]──▶  small_pod5_files/            │
-           │  small_pod5_files/  ──[step 3]──▶  reads.bam + reads.fasta │
+           │                                                             │
+           │  Pipeline A (standard):                                     │
+           │  pod5_files/  ──[step 3]──▶  reads.bam + reads.fasta      │
            │  reads.fasta + ref.fa  ──[step 4]──▶  true_mappings.paf    │
+           │                                                             │
+           │  Pipeline B (refinement):                                   │
+           │  pod5_files/  ──[step 3 -r ref.fa]──▶  reads.bam (aligned) │
+           │  reads.bam + pod5  ──[step 7]──▶  peaks_refined.tsv       │
+           │  reads.bam  ──(samtools fasta)──[step 4]──▶  true_mappings.paf │
            └────────────────────────────────────────────────────────────┘
 
            ┌────────────────────────────────────────────────────────────┐
            │  RawHash2 evaluation loop (steps 5–6)                      │
            │                                                             │
-           │  small_pod5_files/ + ref.fa + pore + true_mappings.paf     │
+           │  pod5_files/ + ref.fa + pore + true_mappings.paf           │
            │    ──[step 5]──▶  v0_baseline/  (index + paf + .results)   │
            │                                                             │
            │  Change params, re-run:                                     │
            │    ──[step 6]──▶   eval_*/  (rebuild index + map + eval)   │
            │    ──[step 6.1]──▶ eval_*/  (reuse index + map + eval)    │
            │      (compare against minimap2 PAF or v0 baseline PAF)     │
+           │                                                             │
+           │  With refinement peaks:                                     │
+           │    ──[step 6]──▶  pass -e "--peaks-file peaks_refined.tsv" │
            └────────────────────────────────────────────────────────────┘
 ```
 
@@ -105,6 +133,9 @@ PORE_R10=/path/to/rawhash2/extern/local_kmer_models/uncalled_r1041_model_only_me
 
 DATA=/path/to/your/data
 SCRIPTS=/path/to/rawhash2/test/benchmark/scripts
+
+# For the refinement pipeline (step 7), PORE_R10 doubles as the level table
+# since it is already in 2-column format (kmer, level_mean).
 ```
 
 ---
@@ -157,24 +188,40 @@ is printed.
 
 ### Step 3 — Basecall with Dorado
 
-Basecall the small POD5 to get FASTA reads. Run on a GPU for realistic output
-quality and speed.
+Basecall the small POD5 to get reads. Run on a GPU for realistic output
+quality and speed. Use the **SUP** model for highest accuracy.
 
-**R10.4.1 chemistry (dorado 1.4.0):**
+**SUP reference-aligned basecalling (recommended for refinement pipeline):**
+
+This produces a reference-aligned BAM with move tables, required for Remora
+refinement (step 7). The SUP model gives better basecalls and thus better
+signal-to-base assignments.
+
+```bash
+# R10.4.1 (dorado 1.4.0):
+bash ${SCRIPTS}/3_run_dorado.sh \
+  -b ${DORADO} \
+  -m dna_r10.4.1_e8.2_400bps_sup@v5.2.0 \
+  -r ${DATA}/ref.fa \
+  -i ${DATA}/small_pod5_files \
+  -o ${DATA}/dorado-1.4.0-small-sup \
+  -t 16
+
+# R9.4.1 (dorado 0.9.2):
+bash ${SCRIPTS}/3_run_dorado.sh \
+  -b /path/to/dorado-0.9.2/bin/dorado \
+  -m dna_r9.4.1_e8_sup@v3.3 \
+  -r ${DATA}/ref.fa \
+  -i ${DATA}/small_pod5_files \
+  -o ${DATA}/dorado-0.9.2-small-sup \
+  -t 16
+```
+
+**HAC basecalling without reference (standard pipeline):**
 ```bash
 bash ${SCRIPTS}/3_run_dorado.sh \
   -b ${DORADO} \
   -m hac \
-  -i ${DATA}/small_pod5_files \
-  -o ${DATA}/dorado_small \
-  -t 16
-```
-
-**R9.4.1 chemistry (dorado 0.9.2):**
-```bash
-bash ${SCRIPTS}/3_run_dorado.sh \
-  -b /path/to/dorado-0.9.2/bin/dorado \
-  -m dna_r9.4.1_e8_hac@v3.3 \
   -i ${DATA}/small_pod5_files \
   -o ${DATA}/dorado_small \
   -t 16
@@ -186,14 +233,21 @@ bash ${SCRIPTS}/3_run_dorado.sh \
 
 ---
 
-### Step 4 — Generate ground-truth PAF with minimap2
+### Step 4 — Generate minimap2 PAF
 
-Map the basecalled reads to the reference. This is the "true answer" used to
-score RawHash2 accuracy in steps 5 and 6.
+Map the basecalled reads to the reference with minimap2. This produces the
+`true_mappings.paf` used to score RawHash2 mapping accuracy in steps 5 and 6.
 
+If you used reference-aligned basecalling (step 3 with `-r`), extract FASTA
+from the aligned BAM first:
+```bash
+samtools fasta ${DATA}/dorado-1.4.0-small-sup/reads.bam > ${DATA}/dorado-1.4.0-small-sup/reads.fasta
+```
+
+Then run minimap2:
 ```bash
 bash ${SCRIPTS}/4_run_minimap2.sh \
-  -i ${DATA}/dorado_small/reads.fasta \
+  -i ${DATA}/dorado-1.4.0-small-sup/reads.fasta \
   -r ${DATA}/ref.fa \
   -o ${DATA}/minimap2_small \
   -t 8
@@ -353,6 +407,64 @@ bash ${SCRIPTS}/6.1_run_rawhash2_eval_noindex.sh \
 
 ---
 
+### Step 7 — Refine move tables with Remora
+
+Refine the stride-quantized move tables from Dorado using Remora's signal
+mapping refinement. This produces sample-level segmentation boundaries
+(`peaks_refined.tsv`) that can be passed to RawHash2 via `--peaks-file`.
+
+**Prerequisites:**
+- A reference-aligned BAM with move tables (step 3 with `-r` and `--emit-moves`)
+- The `remora-env` conda environment (not `rawhash2-env` — numpy version conflict)
+
+**Reference-anchored refinement (recommended for ground truth peaks):**
+```bash
+bash ${SCRIPTS}/7_refine_moves_remora.sh \
+  -r -q 20 \
+  -b ${DATA}/dorado-1.4.0-small-sup/reads.bam \
+  -p ${DATA}/small_pod5_files \
+  -l ${PORE_R10} \
+  -o ${DATA}/dorado-1.4.0-small-sup
+```
+
+The `-r` flag enables reference-anchored refinement (`ref_to_signal`), which
+uses the reference sequence for k-mer level lookup instead of the basecalled
+query. This gives better segmentation for reads with high mapping quality.
+`-q 20` filters out low-quality alignments.
+
+**Output files:**
+| File | Description |
+|------|-------------|
+| `moves_refined.tsv` | Refined move table for rawhash2 `--moves-file` |
+| `peaks_refined.tsv` | Sample-level peaks for rawhash2 `--peaks-file` (with `-r`) |
+| `reads_refined.bam` | BAM with refined mv/ts tags |
+| `refine.time` | `/usr/bin/time -v` timing file |
+
+**Evaluating with refined peaks (pass to step 6):**
+```bash
+bash ${SCRIPTS}/6_run_rawhash2_eval.sh \
+  -b ${RH2} \
+  -i ${DATA}/small_pod5_files \
+  -r ${DATA}/ref.fa \
+  -p ${PORE_R10} \
+  -g ${DATA}/minimap2_small/true_mappings.paf \
+  -o ${DATA}/eval_peaks_refined \
+  --r10 -e "--peaks-file ${DATA}/dorado-1.4.0-small-sup/peaks_refined.tsv" \
+  -n rh2_v2_peaks_sup -t 8
+```
+
+**K-mer level tables** (the `-l` flag):
+
+| Chemistry | Level table | Notes |
+|-----------|-------------|-------|
+| R9.4.1 | `extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA_means_only.txt` | 2-column (kmer, level_mean) |
+| R10.4.1 | `extern/local_kmer_models/uncalled_r1041_model_only_means.txt` | 2-column (kmer, level_mean) |
+
+> **Important:** Remora's `load_kmer_table()` requires exactly 2 columns
+> (kmer and level_mean). The original 6-column `.model` files will not work.
+
+---
+
 ## R9.4.1 Example (E. coli)
 
 ```bash
@@ -360,13 +472,22 @@ DATA_D2=/path/to/your/r94/data
 DORADO_R9=/path/to/dorado-0.9.2/bin/dorado
 PORE_R9=/path/to/rawhash2/extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model
 
+# Standard pipeline (HAC, unaligned):
 bash ${SCRIPTS}/2_create_small_pod5.sh -i ${DATA_D2}/pod5_files -n 4000
 bash ${SCRIPTS}/3_run_dorado.sh -b ${DORADO_R9} -m dna_r9.4.1_e8_hac@v3.3 -i ${DATA_D2}/small_pod5_files -o ${DATA_D2}/dorado_small -t 16
 bash ${SCRIPTS}/4_run_minimap2.sh -i ${DATA_D2}/dorado_small/reads.fasta -r ${DATA_D2}/ref.fa -o ${DATA_D2}/minimap2_small -t 8
 bash ${SCRIPTS}/5_run_rawhash2_baseline.sh -b ${RH2} -i ${DATA_D2}/small_pod5_files -r ${DATA_D2}/ref.fa -p ${PORE_R9} -g ${DATA_D2}/minimap2_small/true_mappings.paf -o ${DATA_D2}/v0_baseline -t 8
+
+# Refinement pipeline (SUP, reference-aligned):
+PORE_R9_MEANS=/path/to/rawhash2/extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA_means_only.txt
+bash ${SCRIPTS}/3_run_dorado.sh -b ${DORADO_R9} -m dna_r9.4.1_e8_sup@v3.3 -r ${DATA_D2}/ref.fa -i ${DATA_D2}/small_pod5_files -o ${DATA_D2}/dorado-0.9.2-small-sup -t 16
+bash ${SCRIPTS}/7_refine_moves_remora.sh -r -q 20 -b ${DATA_D2}/dorado-0.9.2-small-sup/reads.bam -p ${DATA_D2}/small_pod5_files -l ${PORE_R9_MEANS} -o ${DATA_D2}/dorado-0.9.2-small-sup
 ```
 
-> **Note:** Omit `--r10` for R9.4.1 data. Use dorado 0.9.2 with explicit model `dna_r9.4.1_e8_hac@v3.3`.
+> **Note:** Omit `--r10` for R9.4.1 data. Use dorado 0.9.2 with explicit model names.
+> The refinement pipeline uses the 2-column `_means_only.txt` level table, not the
+> original 6-column `.model` file. The standard pipeline (v0 baseline) uses the full
+> `.model` file.
 
 ---
 
@@ -376,11 +497,12 @@ bash ${SCRIPTS}/5_run_rawhash2_baseline.sh -b ${RH2} -i ${DATA_D2}/small_pod5_fi
 |--------|---------|-----------|-------------|
 | `1_fast5_to_pod5.sh` | Convert fast5 to pod5 | `-i fast5_dir` | `pod5_files/` (mirrored structure) |
 | `2_create_small_pod5.sh` | Subset N reads | `-i pod5_dir -n N` | `small_pod5_files/small.pod5` |
-| `3_run_dorado.sh` | Basecall signals | `-b dorado -m model -i pod5 -o out` | `reads.bam reads.fasta basecall.time` |
-| `4_run_minimap2.sh` | Ground-truth mapping | `-i reads.fasta -r ref.fa -o out` | `true_mappings.paf minimap2.time` |
-| `5_run_rawhash2_baseline.sh` | v0 baseline run | `-b rh2 -i pod5 -r ref -p pore -g gt_paf -o out` | `*.paf *_ann.paf *.results` |
-| `6_run_rawhash2_eval.sh` | Iterative evaluation (rebuild index) | `-b rh2 -i pod5 -r ref -p pore -g any_paf -o out` | `*.ind *.paf *_ann.paf *.results` |
-| `6.1_run_rawhash2_eval_noindex.sh` | Iterative evaluation (reuse index) | `-b rh2 -i pod5 -I index.ind -g any_paf -o out` | `*.paf *_ann.paf *.results` |
+| `3_run_dorado.sh` | Basecall signals | `-b dorado -m model -i pod5 -o out [-r ref]` | `reads.bam reads.fasta basecall.time` |
+| `4_run_minimap2.sh` | minimap2 PAF generation | `-i reads.fasta -r ref.fa -o out` | `true_mappings.paf minimap2.time` |
+| `5_run_rawhash2_baseline.sh` | v0 baseline run | `-b rh2 -i pod5 -r ref -p pore -g paf -o out` | `*.paf *_ann.paf *.results` |
+| `6_run_rawhash2_eval.sh` | Iterative evaluation (rebuild index) | `-b rh2 -i pod5 -r ref -p pore -g paf -o out` | `*.ind *.paf *_ann.paf *.results` |
+| `6.1_run_rawhash2_eval_noindex.sh` | Iterative evaluation (reuse index) | `-b rh2 -i pod5 -I index.ind -g paf -o out` | `*.paf *_ann.paf *.results` |
+| `7_refine_moves_remora.sh` | Remora signal refinement | `-b bam -p pod5 -l level_table -o out [-r]` | `moves_refined.tsv peaks_refined.tsv reads_refined.bam` |
 
 Run any script with `-h` for full usage information:
 ```bash
@@ -391,14 +513,20 @@ bash scripts/5_run_rawhash2_baseline.sh -h
 
 ## Chemistry Guide
 
-| Chemistry | Dorado version | Dorado model | RawHash2 pore model | RawHash2 flag |
-|-----------|---------------|--------------|---------------------|---------------|
-| R9.4.1    | 0.9.2         | `dna_r9.4.1_e8_hac@v3.3` | `extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model` | *(none)* |
-| R10.4.1   | 1.4.0         | `hac` (auto-selects latest model) | `extern/local_kmer_models/uncalled_r1041_model_only_means.txt` | `--r10` |
+| Chemistry | Dorado version | Dorado SUP model | Dorado HAC model | RawHash2 pore model | RawHash2 flag |
+|-----------|---------------|------------------|------------------|---------------------|---------------|
+| R9.4.1    | 0.9.2         | `dna_r9.4.1_e8_sup@v3.3` | `dna_r9.4.1_e8_hac@v3.3` | `extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA.model` | *(none)* |
+| R10.4.1 (new) | 1.4.0    | `dna_r10.4.1_e8.2_400bps_sup@v5.2.0` | `hac` | `extern/local_kmer_models/uncalled_r1041_model_only_means.txt` | `--r10` |
+| R10.4.1 (old) | 0.9.2    | `dna_r10.4.1_e8.2_400bps_sup@v4.1.0` | `dna_r10.4.1_e8.2_400bps_hac@v4.1.0` | same as above | `--r10` |
 
-> **Note:** Dorado 0.9.2 is used for R9.4.1 and 1.4.0 for R10.4.1. With Dorado 0.9.2+,
-> models are referenced by name and auto-downloaded on first use rather than requiring
-> a local model path.
+> **Note:** Use the **SUP** model for refinement pipelines (better basecalls → better
+> signal-to-base mapping). HAC is sufficient for standard v0 baseline evaluation.
+
+> **Level tables for Remora refinement** (script 7) must be 2-column files (kmer, level_mean):
+> - R9.4.1: `extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA_means_only.txt`
+> - R10.4.1: `extern/local_kmer_models/uncalled_r1041_model_only_means.txt`
+>
+> The full 6-column `.model` files are used by RawHash2 itself (scripts 5/6), not by Remora.
 
 ---
 
@@ -455,8 +583,10 @@ System time (seconds): 11.27
 - Script 3 requires `samtools` on your PATH.
 - Scripts 5, 6, and 6.1 automatically find `pafstats.py` and `analyze_paf.py` at
   `../../scripts/` relative to the benchmark scripts directory (i.e., `test/scripts/`).
+- Script 7 uses `test/scripts/refine_moves_remora.py` (found relative to the benchmark
+  scripts directory).
 - The `-e` flag in scripts 5/6/6.1 accepts any extra rawhash2 parameters as a quoted
-  string, e.g. `-e "-w 3 --min-anchors 3"`.
+  string, e.g. `-e "-w 3 --min-anchors 3"` or `-e "--peaks-file /path/to/peaks.tsv"`.
 - Script 6.1 is the preferred choice for most iterative experiments since it avoids
   redundant re-indexing. Only use script 6 when changing indexing-related parameters
   (`-w`, `-k`, `-e events`, `-q`, `--sig-diff`, preset, `--r10`, or pore model).

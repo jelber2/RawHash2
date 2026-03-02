@@ -52,7 +52,7 @@ typedef struct ri_idxopt_s{
 	int64_t mini_batch_size;
 	uint64_t batch_size;
 
-	float diff;
+	int diff;
 	float fine_min, fine_max, fine_range;
 
 	uint32_t window_length1;
@@ -60,6 +60,7 @@ typedef struct ri_idxopt_s{
 	float threshold1;
 	float threshold2;
 	float peak_height;
+
 	float sample_per_base;
 	uint32_t bp_per_sec;
 	uint32_t sample_rate;
@@ -149,6 +150,9 @@ typedef struct ri_mapopt_s{
 	//External segmentation data (NULL = use internal event detection)
 	void *ext_peaks;	// ri_ext_peaks_t* (opaque handle, loaded from --peaks-file)
 	void *ext_events;	// ri_ext_events_t* (opaque handle, loaded from --events-file)
+
+	//Debug output (NULL = disabled; set via --debug-read READID)
+	const char *debug_read;	// when non-NULL, print detailed diagnostics for this read
 } ri_mapopt_t;
 
 /**

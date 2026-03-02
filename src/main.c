@@ -60,7 +60,7 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"store-sig",			ko_no_argument, 	  	344 },
 	{ (char*)"sig-target",			ko_no_argument, 	  	345 },
 	{ (char*)"disable-adaptive",	ko_no_argument, 	  	346 },
-	{ (char*)"sig-diff",			ko_required_argument, 	347 },
+	{ (char*)"sig-diff",			ko_required_argument,	347 },
 	{ (char*)"align",				ko_no_argument, 	  	348 },
 	{ (char*)"dtw-evaluate-chains",	ko_no_argument,		  	349 },
 	{ (char*)"dtw-output-cigar",	ko_no_argument,		  	350 },
@@ -104,6 +104,8 @@ static ko_longopt_t long_options[] = {
 	{ (char*)"live-uncalibrated",	ko_no_argument,       	387 },
 #endif
 	{ (char*)"skip-first-events",	ko_required_argument, 	388 },
+	{ (char*)"debug-read",			ko_required_argument, 	389 },
+	// removed: quant-sig-diff (390) — merged into --sig-diff
 	{ 0, 0, 0 }
 };
 
@@ -300,7 +302,7 @@ int main(int argc, char *argv[])
 	ri_live_opt_init(&live_opt);
 #endif
 
-	// first pass: apply presets (-x) and context-dependent defaults (--moves-file)
+	// first pass: apply presets (-x) and context-dependent defaults (--moves-file, --peaks-file)
 	while ((c = ketopt(&o, argc, argv, 1, opt_str, long_options)) >= 0) {
 		if (c == 'x') {
 			if (ri_set_opt(o.arg, &ipt, &opt) < 0) {
@@ -309,7 +311,9 @@ int main(int argc, char *argv[])
 			}
 		} else if (c == 374) { // --moves-file: auto-set defaults (user can override in second pass)
 			opt.skip_first_events = 1;
-			ipt.diff = 0.0f; // sig-diff=0 gives best accuracy with move tables
+			ipt.diff = -1; // disable sig-diff filtering: move tables give best accuracy without it
+		} else if (c == 372) { // --peaks-file: auto-set defaults (user can override in second pass)
+			ipt.diff = -1; // disable sig-diff filtering: peaks give 1:1 event-to-base
 		} else if (c == ':') {
 			fprintf(stderr, "[ERROR] missing option argument\n");
 			return 1;
@@ -400,7 +404,7 @@ int main(int argc, char *argv[])
 		else if (c == 344) {ipt.flag |= RI_I_STORE_SIG;} // --store-sig
 		else if (c == 345) {ipt.flag |= RI_I_SIG_TARGET;} // --sig-target
 		else if (c == 346) {opt.flag |= RI_M_NO_ADAPTIVE;} // --disable-adaptive
-		else if (c == 347) {ipt.diff = atof(o.arg);} // --sig-diff
+		else if (c == 347) {ipt.diff = atoi(o.arg);} // --sig-diff INT
 		else if (c == 348) {opt.flag |= RI_M_ALIGN;} // --align
 		else if (c == 349) opt.flag |= RI_M_DTW_EVALUATE_CHAINS; // --dtw-evaluate-chains
 		else if (c == 350) opt.flag |= RI_M_DTW_OUTPUT_CIGAR; // --dtw-output-cigar
@@ -430,11 +434,11 @@ int main(int argc, char *argv[])
 			ipt.k = 9;
 
 			ipt.window_length1 = 3; ipt.window_length2 = 6;
-			ipt.threshold1 = 6.5f; ipt.threshold2 = 4.0f;  
+			ipt.threshold1 = 5.5f; ipt.threshold2 = 3.5f;
 			ipt.peak_height = 0.2f;
 
 			opt.window_length1 = 3; opt.window_length2 = 6;
-			opt.threshold1 = 6.5f; opt.threshold2 = 4.0f;
+			opt.threshold1 = 5.5f; opt.threshold2 = 3.5f;
 			opt.peak_height = 0.2f;
 
 			opt.chain_gap_scale = 1.2f;
@@ -474,6 +478,8 @@ int main(int argc, char *argv[])
 		else if (c == 387) live_opt.uncalibrated = 1; // --live-uncalibrated
 #endif
 		else if (c == 388) opt.skip_first_events = (uint32_t)atoi(o.arg); // --skip-first-events
+		else if (c == 389) opt.debug_read = o.arg; // --debug-read
+		// removed: case 390 (quant-sig-diff) — merged into --sig-diff (case 347)
 		else if (c == 'V') {puts(RH_VERSION); return 0;}
 	}
 
@@ -500,7 +506,7 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    -e INT       events per hash value [%d]. Also applies during mapping\n", ipt.e);
 		fprintf(fp_help, "    -q INT       quantization bits [%d]. Creates 2^INT buckets\n", ipt.q);
 		fprintf(fp_help, "    -w INT       minimizer window size [%d]. >0 enables minimizer seeding (faster, less accurate)\n", ipt.w);
-		fprintf(fp_help, "    --sig-diff FLOAT   min difference between consecutive events for hashing [%g] (auto-set to 0 with --moves-file)\n", ipt.diff);
+		fprintf(fp_help, "    --sig-diff INT     skip events if quantized difference <= INT [%d]. -1 disables filtering (auto-set to -1 with --moves-file/--peaks-file)\n", ipt.diff);
 		fprintf(fp_help, "    --store-sig  store reference signal in index (required for DTW alignment)\n");
 		fprintf(fp_help, "    --sig-target reference contains signal values instead of bases (for overlapping)\n");
 
@@ -545,12 +551,12 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --sample-rate INT      sampling rate in Hz [%u]\n", opt.sample_rate);
 		fprintf(fp_help, "    --chunk-size INT       samples per chunk [%u]\n", opt.chunk_size);
 
-		fprintf(fp_help, "\n  Signal Segmentation (t-test peak detection):\n");
-		fprintf(fp_help, "    --seg-window-length1 INT   short detector window [%u]\n", opt.window_length1);
-		fprintf(fp_help, "    --seg-window-length2 INT   long detector window [%u]\n", opt.window_length2);
-		fprintf(fp_help, "    --seg-threshold1 FLOAT     peak threshold for short window [%g]\n", opt.threshold1);
-		fprintf(fp_help, "    --seg-threshold2 FLOAT     peak threshold for long window [%g]\n", opt.threshold2);
-		fprintf(fp_help, "    --seg-peak-height FLOAT    min peak prominence [%g]\n", opt.peak_height);
+		fprintf(fp_help, "\n  Signal Segmentation:\n");
+		fprintf(fp_help, "    --seg-window-length1 INT   short detector window (ttest) [%u]\n", opt.window_length1);
+		fprintf(fp_help, "    --seg-window-length2 INT   long detector window (ttest) [%u]\n", opt.window_length2);
+		fprintf(fp_help, "    --seg-threshold1 FLOAT     peak threshold for short window (ttest) [%g]\n", opt.threshold1);
+		fprintf(fp_help, "    --seg-threshold2 FLOAT     peak threshold for long window (ttest) [%g]\n", opt.threshold2);
+		fprintf(fp_help, "    --seg-peak-height FLOAT    min peak prominence (ttest) [%g]\n", opt.peak_height);
 		fprintf(fp_help, "    --min-seg-length INT       skip segments shorter than INT [%u]\n", opt.min_segment_length);
 		fprintf(fp_help, "    --max-seg-length INT       skip segments longer than INT [%u]\n", opt.max_segment_length);
 
@@ -617,6 +623,7 @@ int main(int argc, char *argv[])
 		fprintf(fp_help, "    --log-anchors               log seed/anchor positions to stderr\n");
 		fprintf(fp_help, "    --log-num-anchors           log anchor counts per read to stderr\n");
 		fprintf(fp_help, "    --output-chains             log chain details to stderr\n");
+		fprintf(fp_help, "    --debug-read STR            print detailed diagnostics for a specific read\n");
 		fprintf(fp_help, "    --dtw-log-scores            log DTW alignment scores to stderr\n");
 		fprintf(fp_help, "    --no-chainingscore-filtering   disable chain score filtering\n");
 

@@ -52,7 +52,7 @@ void ri_idx_stat(const ri_idx_t *ri)
 	fprintf(stderr, "[M::%s] pore kmer size: %d; concatanated events: %d; quantization bits: %d; w: %d; n: %d; #seq: %d\n", __func__, ri->k, ri->e, ri->q, ri->w, ri->n, ri->n_seq);
 }
 
-ri_idx_t* ri_idx_init(float diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, int flag){
+ri_idx_t* ri_idx_init(int diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, int flag){
 	ri_idx_t* ri;
 	ri = (ri_idx_t*)calloc(1, sizeof(ri_idx_t));
   	ri->b = b, ri->w = w; ri->e = e; ri->n = n; ri->q = q; ri->k = k, ri->flag = flag;
@@ -282,7 +282,9 @@ static void *worker_sig_pipeline(void *shared, int step, void *in)
 				float* s_values;
 				
 				if(!(p->ri->flag&RI_I_NO_EVENT_DETECTION))
-					s_values = detect_events(0, t->l_sig, t->sig, p->ri->window_length1, p->ri->window_length2, p->ri->threshold1, p->ri->threshold2, p->ri->peak_height, 0, 500, &s_sum, &s_std, &n_events_sum, &s_len);
+					s_values = detect_events(0, t->l_sig, t->sig,
+						p->ri->window_length1, p->ri->window_length2, p->ri->threshold1, p->ri->threshold2, p->ri->peak_height,
+						0, 500, &s_sum, &s_std, &n_events_sum, &s_len);
 				else s_values = normalize_signal(0, t->sig, t->l_sig, &s_sum, &s_std, &n_events_sum, &s_len);
 				
 				short out = (p->ri->flag&RI_I_OUT_QUANTIZE)?1:0;
@@ -550,7 +552,7 @@ void ri_idx_dump(FILE* idx_file, const ri_idx_t* ri){
 	
 	fwrite(RI_IDX_MAGIC, 1, RI_IDX_MAGIC_BYTE, idx_file);
 	fwrite(pars, sizeof(uint32_t), 7, idx_file);
-	fwrite(&ri->diff, sizeof(float), 1, idx_file);
+	fwrite(&ri->diff, sizeof(int), 1, idx_file);
 	fwrite(&ri->fine_min, sizeof(float), 1, idx_file);
 	fwrite(&ri->fine_max, sizeof(float), 1, idx_file);
 	fwrite(&ri->fine_range, sizeof(float), 1, idx_file);
@@ -660,8 +662,9 @@ ri_idx_t* ri_idx_load(FILE* idx_file){
 	int pars[7];
 	fread(&pars[0], sizeof(int), 7, idx_file);
 
-	float diff, fine_min, fine_max, fine_range;
-	fread(&diff, sizeof(float), 1, idx_file);
+	int diff;
+	float fine_min, fine_max, fine_range;
+	fread(&diff, sizeof(int), 1, idx_file);
 	fread(&fine_min, sizeof(float), 1, idx_file);
 	fread(&fine_max, sizeof(float), 1, idx_file);
 	fread(&fine_range, sizeof(float), 1, idx_file);
@@ -897,7 +900,7 @@ static inline uint64_t hash64(uint64_t key, uint64_t mask){
 // 	// if(riv.a){ri_kfree(0, riv.a); riv.a = NULL; riv.n = riv.m = 0;}
 // }
 
-ri_idx_t* ri_idx_gen(mm_bseq_file_t* fp, ri_pore_t* pore, float diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, int flag, int mini_batch_size, int n_threads, int io_n_threads, uint64_t batch_size)
+ri_idx_t* ri_idx_gen(mm_bseq_file_t* fp, ri_pore_t* pore, int diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, int flag, int mini_batch_size, int n_threads, int io_n_threads, uint64_t batch_size)
 {
 	if(flag&RI_I_SIG_TARGET) return 0;
 
@@ -924,7 +927,7 @@ ri_idx_t* ri_idx_gen(mm_bseq_file_t* fp, ri_pore_t* pore, float diff, int b, int
 	return pl.ri;
 }
 
-ri_idx_t* ri_idx_siggen(ri_sig_file_t** fp, char **f, int *cur_f, int n_f, ri_pore_t* pore, float diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, uint32_t window_length1, uint32_t window_length2, float threshold1, float threshold2, float peak_height, int flag, int mini_batch_size, int n_threads, int io_n_threads, uint64_t batch_size)
+ri_idx_t* ri_idx_siggen(ri_sig_file_t** fp, char **f, int *cur_f, int n_f, ri_pore_t* pore, int diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, uint32_t window_length1, uint32_t window_length2, float threshold1, float threshold2, float peak_height, int flag, int mini_batch_size, int n_threads, int io_n_threads, uint64_t batch_size)
 {
 	if(!(flag&RI_I_SIG_TARGET)) return 0;
 

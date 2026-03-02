@@ -6,22 +6,35 @@
 # to force CPU mode. The --emit-moves flag is included by default (required
 # for using the rawhash2 --moves-file feature).
 #
+# With -r (--reference), produces a reference-aligned BAM instead of an
+# unaligned one. This is required for Remora signal refinement (script 7).
+# When -r is used, reads.fasta is extracted from the aligned BAM.
+#
 # After basecalling, samtools converts reads.bam -> reads.fasta.
 #
 # Usage:
 #   bash 3_run_dorado.sh -b DORADO_BIN -m MODEL -i POD5_DIR -o OUTPUT_DIR [options]
 #
-# Example — GPU basecalling with dorado 1.4.0, hac model (R10.4.1):
+# Example — SUP ref-aligned basecalling, R10.4.1 (dorado 1.4.0):
+#   bash 3_run_dorado.sh \
+#     -b /path/to/dorado-1.4.0-linux-x64/bin/dorado \
+#     -m dna_r10.4.1_e8.2_400bps_sup@v5.2.0 \
+#     -r /data/ecoli/ref.fa \
+#     -i /data/ecoli/small_pod5_files \
+#     -o /data/ecoli/dorado-1.4.0-small-sup
+#
+# Example — SUP ref-aligned basecalling, R9.4.1 (dorado 0.9.2):
+#   bash 3_run_dorado.sh \
+#     -b /path/to/dorado-0.9.2-linux-x64/bin/dorado \
+#     -m dna_r9.4.1_e8_sup@v3.3 \
+#     -r /data/ecoli/ref.fa \
+#     -i /data/ecoli/small_pod5_files \
+#     -o /data/ecoli/dorado-0.9.2-small-sup
+#
+# Example — HAC basecalling without reference (unaligned BAM):
 #   bash 3_run_dorado.sh \
 #     -b /path/to/dorado-1.4.0-linux-x64/bin/dorado \
 #     -m hac \
-#     -i /data/ecoli/small_pod5_files \
-#     -o /data/ecoli/dorado
-#
-# Example — GPU basecalling with explicit R9.4.1 model (dorado 0.9.2):
-#   bash 3_run_dorado.sh \
-#     -b /path/to/dorado-0.9.2-linux-x64/bin/dorado \
-#     -m dna_r9.4.1_e8_hac@v3.3 \
 #     -i /data/ecoli/small_pod5_files \
 #     -o /data/ecoli/dorado
 #
@@ -42,6 +55,7 @@ DORADO_BIN=""
 MODEL=""
 INPUT_DIR=""
 OUTPUT_DIR=""
+REFERENCE=""
 DEVICE="auto"
 THREADS=16
 EMIT_MOVES=true
@@ -62,12 +76,17 @@ Required:
             (e.g. /path/to/dorado-1.4.0-linux-x64/bin/dorado)
   -m STR    Model name/preset or path to model directory
             Presets: fast, hac, sup
-            R9.4.1 example: dna_r9.4.1_e8_hac@v3.3
-            R10.4.1 example: hac  (dorado auto-selects from chemistry)
+            R9.4.1 SUP: dna_r9.4.1_e8_sup@v3.3
+            R9.4.1 HAC: dna_r9.4.1_e8_hac@v3.3
+            R10.4.1 (dorado 1.4.0): dna_r10.4.1_e8.2_400bps_sup@v5.2.0
+            R10.4.1 (dorado 0.9.2): dna_r10.4.1_e8.2_400bps_sup@v4.1.0
   -i PATH   Input pod5 directory
   -o PATH   Output directory (will be created if it does not exist)
 
 Optional:
+  -r PATH   Reference FASTA for aligned basecalling (dorado --reference).
+            Required for Remora signal refinement (script 7). Produces a
+            reference-aligned BAM instead of an unaligned one.
   -x STR    Device to use: auto | cpu | cuda:0 | cuda:all
             (default: auto — dorado auto-detects GPU; strongly prefer GPU)
   -t INT    CPU threads for dorado (default: ${THREADS})
@@ -91,26 +110,25 @@ Device notes:
   cuda:0    Use first GPU only
   cuda:all  Use all available GPUs
 
-Dorado versions:
-  R10.4.1 chemistry: /path/to/dorado-1.4.0-linux-x64/bin/dorado
-  R9.4.1  chemistry: /path/to/dorado-0.9.2-linux-x64/bin/dorado
-                     (use with model: dna_r9.4.1_e8_hac@v3.3)
+Dorado versions and models:
+  R10.4.1 chemistry (dorado 1.4.0): dna_r10.4.1_e8.2_400bps_sup@v5.2.0
+  R10.4.1 chemistry (dorado 0.9.2): dna_r10.4.1_e8.2_400bps_sup@v4.1.0
+  R9.4.1  chemistry (dorado 0.9.2): dna_r9.4.1_e8_sup@v3.3 (or hac)
 
-Example:
-  # GPU basecalling, R10.4.1 (auto device):
+Example — SUP ref-aligned basecalling for refinement pipeline:
+  bash $(basename "$0") \\
+    -b /path/to/dorado-1.4.0-linux-x64/bin/dorado \\
+    -m dna_r10.4.1_e8.2_400bps_sup@v5.2.0 \\
+    -r /path/to/ref.fa \\
+    -i /path/to/small_pod5_files \\
+    -o /path/to/dorado-1.4.0-small-sup
+
+Example — HAC basecalling without reference:
   bash $(basename "$0") \\
     -b /path/to/dorado-1.4.0-linux-x64/bin/dorado \\
     -m hac \\
     -i /path/to/small_pod5_files \\
     -o /path/to/dorado_out
-
-  # CPU basecalling:
-  bash $(basename "$0") \\
-    -b /path/to/dorado-1.4.0-linux-x64/bin/dorado \\
-    -m hac \\
-    -i /path/to/small_pod5_files \\
-    -o /path/to/dorado_cpu_out \\
-    -x cpu
 EOF
 }
 
@@ -127,12 +145,13 @@ while [ $# -gt 0 ]; do
 done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
-while getopts ":b:m:i:o:x:t:s:h" opt "$@"; do
+while getopts ":b:m:i:o:r:x:t:s:h" opt "$@"; do
     case "${opt}" in
         b) DORADO_BIN="${OPTARG}" ;;
         m) MODEL="${OPTARG}" ;;
         i) INPUT_DIR="${OPTARG}" ;;
         o) OUTPUT_DIR="${OPTARG}" ;;
+        r) REFERENCE="${OPTARG}" ;;
         x) DEVICE="${OPTARG}" ;;
         t) THREADS="${OPTARG}" ;;
         s) SAMTOOLS_BIN="${OPTARG}" ;;
@@ -154,9 +173,11 @@ errors=0
 
 [ ! -f "${DORADO_BIN}" ] && echo "Error: dorado binary not found: ${DORADO_BIN}" >&2 && exit 1
 [ ! -d "${INPUT_DIR}" ]  && echo "Error: Input directory not found: ${INPUT_DIR}" >&2 && exit 1
+[ -n "${REFERENCE}" ] && [ ! -f "${REFERENCE}" ] && echo "Error: Reference FASTA not found: ${REFERENCE}" >&2 && exit 1
 
 INPUT_DIR="$(realpath "${INPUT_DIR}")"
 OUTPUT_DIR="$(realpath -m "${OUTPUT_DIR}")"
+[ -n "${REFERENCE}" ] && REFERENCE="$(realpath "${REFERENCE}")"
 
 if [ -z "${SAMTOOLS_BIN}" ]; then
     if command -v samtools &>/dev/null; then
@@ -188,6 +209,11 @@ if [ "${DISABLE_SPLITTING}" = "true" ]; then
     SPLITTING_FLAG="--disable-read-splitting"
 fi
 
+REFERENCE_FLAG=""
+if [ -n "${REFERENCE}" ]; then
+    REFERENCE_FLAG="--reference ${REFERENCE}"
+fi
+
 mkdir -p "${OUTPUT_DIR}"
 
 BAM="${OUTPUT_DIR}/reads.bam"
@@ -199,6 +225,7 @@ echo "  dorado binary : ${DORADO_BIN}"
 echo "  model         : ${MODEL}"
 echo "  input pod5    : ${INPUT_DIR}"
 echo "  output dir    : ${OUTPUT_DIR}"
+echo "  reference     : ${REFERENCE:-none (unaligned)}"
 echo "  device        : ${DEVICE}"
 echo "  threads       : ${THREADS}"
 echo "  emit-moves    : ${EMIT_MOVES}"
@@ -220,6 +247,7 @@ echo "Running dorado basecaller..."
         ${DEVICE_FLAG} \
         ${MOVES_FLAG} \
         ${SPLITTING_FLAG} \
+        ${REFERENCE_FLAG} \
         "${MODEL}" \
         "${INPUT_DIR}" \
     > "${BAM}" \
@@ -234,7 +262,7 @@ ls -lh "${BAM}"
 ###############################################################################
 echo ""
 echo "Converting BAM to FASTA via samtools..."
-"${SAMTOOLS_BIN}" fasta "${BAM}" > "${FASTA}" 2>&1
+"${SAMTOOLS_BIN}" fasta "${BAM}" > "${FASTA}"
 
 echo "Done."
 echo ""

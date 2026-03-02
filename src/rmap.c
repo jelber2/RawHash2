@@ -325,7 +325,9 @@ void ri_map_frag(const ri_idx_t *ri,
 	} else {
 		/* Default: full t-test event detection.
 		 * For non-ext_pk paths, skip_first_events is applied after generation. */
-		events = detect_events(b->km, s_len, sig, opt->window_length1, opt->window_length2, opt->threshold1, opt->threshold2, opt->peak_height, opt->min_segment_length, opt->max_segment_length, mean_sum, std_dev_sum, n_events_sum, &n_events);
+		events = detect_events(b->km, s_len, sig,
+			opt->window_length1, opt->window_length2, opt->threshold1, opt->threshold2, opt->peak_height,
+			opt->min_segment_length, opt->max_segment_length, mean_sum, std_dev_sum, n_events_sum, &n_events);
 		if (events && opt->skip_first_events > 0 && opt->skip_first_events < n_events) {
 			uint32_t skip_n = opt->skip_first_events;
 			n_events -= skip_n;
@@ -351,6 +353,9 @@ void ri_map_frag(const ri_idx_t *ri,
 	#ifdef PROFILERH
 	double sketch_t = ri_realtime();
 	#endif
+
+	/* Debug: event count before sketching */
+	uint32_t n_events_before_sketch = n_events;
 
 	//Sketching
 	mm128_v riv = {0,0,0};
@@ -410,6 +415,7 @@ void ri_map_frag(const ri_idx_t *ri,
 
 	//Seeding
 	seed_hits = collect_seed_hits(b->km, (opt->flag&RI_M_ALL_CHAINS)?1:0, opt->mid_occ, opt->max_max_occ, opt->occ_dist, ri, qname, reg, &riv, n_events, &n_seed_pos, &rep_len);
+	uint32_t n_seeds_generated = (uint32_t)riv.n; /* save before free for debug output */
 	if(riv.a){ri_kfree(b->km, riv.a); riv.a = NULL; riv.n = riv.m = 0;}
 	// ri_kfree(b->km, seed_mini);
 
@@ -483,6 +489,21 @@ void ri_map_frag(const ri_idx_t *ri,
 
 	//Set MAPQ TODO: integrate alignment score within mapq
 	mm_set_mapq(b->km, reg->n_cregs, reg->creg, opt->min_chaining_score, rep_len, (opt->flag&RI_M_DTW_EVALUATE_CHAINS)?1:0);
+
+	/* --debug-read: print per-chunk event/seed/chain diagnostics */
+	if (opt->debug_read && qname && strcmp(qname, opt->debug_read) == 0) {
+		fprintf(stderr, "DEBUG_READ\t%s\tchunk_offset=%u\tn_events=%u\tn_seeds=%u\tn_seed_hits=%ld\tn_chains=%d\n",
+			qname, reg->offset, n_events_before_sketch, n_seeds_generated, n_seed_pos, reg->n_cregs);
+		for (int di = 0; di < reg->n_cregs; ++di) {
+			fprintf(stderr, "  chain[%d]\trid=%d\t%c\trs=%d\tre=%d\tscore=%d\tcnt=%d\tmapq=%d",
+				di, reg->creg[di].rid, "+-"[reg->creg[di].rev],
+				reg->creg[di].rs, reg->creg[di].re,
+				reg->creg[di].score, reg->creg[di].cnt, reg->creg[di].mapq);
+			if (opt->flag & RI_M_DTW_EVALUATE_CHAINS)
+				fprintf(stderr, "\talign_score=%.2f", reg->creg[di].alignment_score);
+			fprintf(stderr, "\n");
+		}
+	}
 
 	if(seed_hits){ri_kfree(b->km, seed_hits); seed_hits = NULL;}
 	if(u){ri_kfree(b->km, u); u = NULL;}
@@ -575,6 +596,16 @@ int ri_map_one_chunk(const ri_idx_t *ri, const ri_mapopt_t *opt,
 			}
 		}
 
+		/* --debug-read: print mapping decision details */
+		if (opt->debug_read && qname && strcmp(qname, opt->debug_read) == 0) {
+			fprintf(stderr, "DEBUG_DECISION\t%s\tchain=%d\tweighted_sum=%.4f\tthreshold=%.4f\t"
+				"r_bestq=%.4f\tr_bestmq=%.4f\tr_bestmc=%.4f\tr_bestma=%.4f\t"
+				"bestQ=%.1f\tbestC=%.1f\tbestA=%.1f\tmeanC=%.1f\tmeanQ=%.1f\n",
+				qname, ic, weighted_sum, opt->w_threshold,
+				r_bestq, r_bestmq, r_bestmc, r_bestma,
+				bestQ, bestC, bestA, meanC, meanQ);
+		}
+
 		// Compare the weighted sum against a threshold to make the decision
 		if (weighted_sum >= opt->w_threshold || (opt->flag&RI_M_ALL_CHAINS && reg->creg[ic].score >= opt->min_chaining_score2)) {
 			reg->n_maps++;
@@ -614,6 +645,21 @@ void ri_map_finalize(const ri_idx_t *ri, const ri_mapopt_t *opt,
 
 	if(!chains) {reg->n_cregs = 0;}
 	float mean_chain_score = 0;
+
+	/* --output-chains: log chain details to stderr for each read */
+	if ((opt->flag & RI_M_OUTPUT_CHAINS) && read_name) {
+		fprintf(stderr, "CHAINS\t%s\tn_chains=%d\tn_maps=%d\toffset=%u\n",
+			read_name, reg->n_cregs, reg->n_maps, reg->offset);
+		for (int ci = 0; ci < reg->n_cregs; ++ci) {
+			fprintf(stderr, "  chain[%d]\trid=%d\t%c\trs=%d\tre=%d\tscore=%d\tcnt=%d\tmapq=%d",
+				ci, chains[ci].rid, "+-"[chains[ci].rev],
+				chains[ci].rs, chains[ci].re,
+				chains[ci].score, chains[ci].cnt, chains[ci].mapq);
+			if (opt->flag & RI_M_DTW_EVALUATE_CHAINS)
+				fprintf(stderr, "\talign_score=%.2f", chains[ci].alignment_score);
+			fprintf(stderr, "\n");
+		}
+	}
 
 	if(reg->n_maps == 0 && reg->creg && reg->creg[0].mapq > opt->min_mapq){
 		reg->n_maps++;

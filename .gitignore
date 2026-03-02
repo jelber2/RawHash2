@@ -83,6 +83,7 @@ test/*.idx
 src/*.o
 
 build/
+__pycache__/
 
 extern/pod5*
 

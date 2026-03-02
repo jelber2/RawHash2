@@ -29,7 +29,7 @@ typedef struct ri_idx_seq_s{
 typedef struct ri_idx_s{
 	int32_t b, w, e, n, q, k, flag;
 	int32_t index;
-	float diff;
+	int diff;
 	float fine_min, fine_max, fine_range;
 	struct ri_idx_bucket_s *B; // index (hidden)
 	struct ri_idx_bucket_s *P; // reverse pore values index (hidden)
@@ -43,6 +43,7 @@ typedef struct ri_idx_s{
 	float threshold1;
 	float threshold2;
 	float peak_height;
+
 	float sample_per_base;
 	uint32_t bp_per_sec;
 	uint32_t sample_rate;
@@ -124,7 +125,7 @@ int64_t ri_idx_is_idx(const char* fn);
  * 
  * @return		rindex (index)
  */
-ri_idx_t* ri_idx_init(float diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, int flag);
+ri_idx_t* ri_idx_init(int diff, int b, int w, int e, int n, int q, int k, float fine_min, float fine_max, float fine_range, int flag);
 
 /**
  * Reads or constructs the index from file. If the file is not index, it should be a file containing sequences to generate the index for.
