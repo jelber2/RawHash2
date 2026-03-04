@@ -65,7 +65,7 @@ Required:
   -b PATH   Aligned BAM file with move tables (dorado --emit-moves --reference)
   -p PATH   Pod5 file or directory of pod5 files
   -l PATH   K-mer level table for Remora refinement (must be 2-column: kmer<TAB>level_mean)
-            R9.4:  \${RAWHASH2}/extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA_means_only.txt
+            R9.4:  \${RAWHASH2}/extern/local_kmer_models/r94_means_only.txt
             R10:   \${RAWHASH2}/extern/local_kmer_models/uncalled_r1041_model_only_means.txt
   -o PATH   Output directory (moves_refined.tsv and reads_refined.bam go here)
 

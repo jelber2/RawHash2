@@ -457,7 +457,7 @@ bash ${SCRIPTS}/6_run_rawhash2_eval.sh \
 
 | Chemistry | Level table | Notes |
 |-----------|-------------|-------|
-| R9.4.1 | `extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA_means_only.txt` | 2-column (kmer, level_mean) |
+| R9.4.1 | `extern/local_kmer_models/r94_means_only.txt` | 2-column (kmer, level_mean) |
 | R10.4.1 | `extern/local_kmer_models/uncalled_r1041_model_only_means.txt` | 2-column (kmer, level_mean) |
 
 > **Important:** Remora's `load_kmer_table()` requires exactly 2 columns
@@ -479,7 +479,7 @@ bash ${SCRIPTS}/4_run_minimap2.sh -i ${DATA_D2}/dorado_small/reads.fasta -r ${DA
 bash ${SCRIPTS}/5_run_rawhash2_baseline.sh -b ${RH2} -i ${DATA_D2}/small_pod5_files -r ${DATA_D2}/ref.fa -p ${PORE_R9} -g ${DATA_D2}/minimap2_small/true_mappings.paf -o ${DATA_D2}/v0_baseline -t 8
 
 # Refinement pipeline (SUP, reference-aligned):
-PORE_R9_MEANS=/path/to/rawhash2/extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA_means_only.txt
+PORE_R9_MEANS=/path/to/rawhash2/extern/local_kmer_models/r94_means_only.txt
 bash ${SCRIPTS}/3_run_dorado.sh -b ${DORADO_R9} -m dna_r9.4.1_e8_sup@v3.3 -r ${DATA_D2}/ref.fa -i ${DATA_D2}/small_pod5_files -o ${DATA_D2}/dorado-0.9.2-small-sup -t 16
 bash ${SCRIPTS}/7_refine_moves_remora.sh -r -q 20 -b ${DATA_D2}/dorado-0.9.2-small-sup/reads.bam -p ${DATA_D2}/small_pod5_files -l ${PORE_R9_MEANS} -o ${DATA_D2}/dorado-0.9.2-small-sup
 ```
@@ -523,7 +523,7 @@ bash scripts/5_run_rawhash2_baseline.sh -h
 > signal-to-base mapping). HAC is sufficient for standard v0 baseline evaluation.
 
 > **Level tables for Remora refinement** (script 7) must be 2-column files (kmer, level_mean):
-> - R9.4.1: `extern/kmer_models/legacy/legacy_r9.4_180mv_450bps_6mer/template_median68pA_means_only.txt`
+> - R9.4.1: `extern/local_kmer_models/r94_means_only.txt`
 > - R10.4.1: `extern/local_kmer_models/uncalled_r1041_model_only_means.txt`
 >
 > The full 6-column `.model` files are used by RawHash2 itself (scripts 5/6), not by Remora.
