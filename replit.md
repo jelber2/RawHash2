@@ -45,16 +45,15 @@ The build requires zlib (provided by Nix). It detects paths automatically via `$
 
 ### `--events-file` unaligned reads (fixed)
 
-Three root causes were identified and fixed:
+Two root causes were identified and fixed:
 
-1. **`main.c` — missing `ipt.diff = -1` for `--events-file`** (first parse pass, lines ~315–322).
-   `--peaks-file` and `--moves-file` auto-set `ipt.diff = -1` to disable the consecutive-quantization-difference filter (sig-diff). `--events-file` was not doing the same, so with the default `diff=0`, many events were silently skipped, preventing hash formation.
+1. **`rmap.c` — external events not z-scored** (`ri_map_frag`, ext_ev branch).
+   The old code `memcpy`'d events from the file directly into the sketch pipeline. The reference index is built with z-scored (normalized) event values, so providing raw pA means (typical range 50–200 pA) produces completely wrong coarse-bucket hashes → zero seed matches → all reads unaligned. The fix computes the per-read signal mean/std-dev from the raw signal samples and applies the same z-score transformation before sketching, making hashes match the index. A guard prevents division-by-zero when `n_events_sum == 0` (signal empty after quality filter).
 
-2. **`rmap.c` — external events not z-scored** (ext_ev branch, `ri_map_frag`).
-   The old code `memcpy`'d events from the file directly into the sketch pipeline. The reference index is built with z-scored (normalized) event values, so providing raw pA means (typical range 50–200 pA) produced completely wrong coarse-bucket hashes → zero seed matches. The fix computes the per-read signal mean/std-dev from the raw signal samples and applies the same z-score transformation before sketching, making hashes match the index.
+2. **`rmap.c` — wrong `no_sig_filter` flag for `--events-file`** (signal reading loop).
+   Previously `no_sig_filter=1` was set for both `--peaks-file` and `--events-file`. The unfiltered flag is correct only for peaks-file (peak indices reference unfiltered raw-signal positions). For events-file, the signal is only needed to derive z-score statistics, so applying the same 30–200 pA quality filter used during index building gives statistics consistent with the reference.
 
-3. **`rmap.c` — wrong `no_sig_filter` flag for `--events-file`** (signal reading loop, line ~912).
-   Previously `no_sig_filter=1` was set for both `--peaks-file` and `--events-file`. The unfiltered flag is correct only for peaks-file (peak indices reference unfiltered raw-signal positions). For events-file, the signal is only needed for computing z-score statistics, so applying the same 30–200 pA quality filter used during index building gives statistics that match the reference exactly.
+**Note: `ipt.diff` is intentionally NOT changed for `--events-file`** — unlike `--peaks-file`/`--moves-file`, the events-file flag must not affect index construction. The diff parameter comes from the preset or user override and is stored in the index; changing it for events-file would make the index inconsistently larger (observed symptom: OOM-killed process in ava-sensitive mode).
 
 ## Usage
 

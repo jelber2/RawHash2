@@ -295,9 +295,13 @@ void ri_map_frag(const ri_idx_t *ri,
                 *n_events_sum += s_len;
                 *mean_sum     = sum;
                 *std_dev_sum  = sum2;
-                double sig_mean = sum  / *n_events_sum;
-                double sig_std  = sqrt(sum2 / *n_events_sum - sig_mean * sig_mean);
-                if (sig_std < 1e-6) sig_std = 1.0;
+                double sig_mean = 0.0, sig_std = 1.0;
+                if (*n_events_sum > 0) {
+                        sig_mean = sum / *n_events_sum;
+                        double var = sum2 / *n_events_sum - sig_mean * sig_mean;
+                        sig_std  = (var > 0.0) ? sqrt(var) : 1.0;
+                        if (sig_std < 1e-6) sig_std = 1.0;
+                }
 
                 n_events = ext_ev->n_events;
                 events = (float*)ri_kmalloc(b->km, n_events * sizeof(float));

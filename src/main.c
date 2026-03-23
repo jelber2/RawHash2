@@ -314,8 +314,6 @@ int main(int argc, char *argv[])
                         ipt.diff = -1; // disable sig-diff filtering: move tables give best accuracy without it
                 } else if (c == 372) { // --peaks-file: auto-set defaults (user can override in second pass)
                         ipt.diff = -1; // disable sig-diff filtering: peaks give 1:1 event-to-base
-                } else if (c == 373) { // --events-file: auto-set defaults (user can override in second pass)
-                        ipt.diff = -1; // disable sig-diff filtering: external events are provided explicitly
                 } else if (c == ':') {
                         fprintf(stderr, "[ERROR] missing option argument\n");
                         return 1;
