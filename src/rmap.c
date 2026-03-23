@@ -1,5 +1,6 @@
 #include "rmap.h"
 #include <assert.h>
+#include <stdatomic.h>
 #include "kthread.h"
 #include "rh_kvec.h"
 #include "rutils.h"
@@ -307,6 +308,36 @@ void ri_map_frag(const ri_idx_t *ri,
                 events = (float*)ri_kmalloc(b->km, n_events * sizeof(float));
                 for (uint32_t i = 0; i < n_events; ++i)
                         events[i] = (float)((ext_ev->events[i] - sig_mean) / sig_std);
+
+                /* Diagnostic: log event stats for the first 3 matched reads so the
+                 * caller can determine whether events are already z-scored (~[-3,3])
+                 * or raw pA means (~50-200).  Thread-safe via atomic counter. */
+                static atomic_int ri_dbg_ev_cnt = 0;
+                int ri_dbg_seq = atomic_fetch_add(&ri_dbg_ev_cnt, 1);
+                if (ri_dbg_seq < 3) {
+                        double ev_sum = 0.0, ev_sq = 0.0;
+                        uint32_t ns = n_events < 20 ? n_events : 20;
+                        for (uint32_t i = 0; i < ns; ++i) {
+                                ev_sum += ext_ev->events[i];
+                                ev_sq  += ext_ev->events[i] * (double)ext_ev->events[i];
+                        }
+                        double ev_mean_raw = ev_sum / ns;
+                        double ev_var_raw  = ev_sq / ns - ev_mean_raw * ev_mean_raw;
+                        double ev_std_raw  = ev_var_raw > 0.0 ? sqrt(ev_var_raw) : 0.0;
+                        fprintf(stderr,
+                                "[D::ext_ev] read=%s n_events=%u "
+                                "raw_ev_mean=%.4f raw_ev_std=%.4f "
+                                "sig_mean=%.4f sig_std=%.4f "
+                                "first5=%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                                qname ? qname : "(null)", ext_ev->n_events,
+                                ev_mean_raw, ev_std_raw,
+                                sig_mean, sig_std,
+                                n_events > 0 ? ext_ev->events[0] : 0.0f,
+                                n_events > 1 ? ext_ev->events[1] : 0.0f,
+                                n_events > 2 ? ext_ev->events[2] : 0.0f,
+                                n_events > 3 ? ext_ev->events[3] : 0.0f,
+                                n_events > 4 ? ext_ev->events[4] : 0.0f);
+                }
         } else if (ext_pk) {
                 /* External peaks: normalize signal, remap indices, run gen_events.
                  * When skip_first_events > 0 (default 1 for --moves-file), trim the
@@ -361,6 +392,14 @@ void ri_map_frag(const ri_idx_t *ri,
         #endif
 
         if(n_events < opt->min_events) {
+                /* Diagnostic: warn once when ext_ev read has too few events. */
+                if (ext_ev) {
+                        static atomic_int ri_dbg_short_cnt = 0;
+                        if (atomic_fetch_add(&ri_dbg_short_cnt, 1) < 3)
+                                fprintf(stderr,
+                                        "[D::ext_ev] read=%s SKIPPED: n_events=%u < min_events=%u\n",
+                                        qname ? qname : "(null)", n_events, opt->min_events);
+                }
                 if(events){ri_kfree(b->km, events); events = NULL;}
                 return;
         }
