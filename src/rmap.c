@@ -343,12 +343,22 @@ void ri_map_frag(const ri_idx_t *ri,
                 int ri_dbg_seq = __sync_fetch_and_add(&ri_dbg_ev_cnt, 1);
                 if (ri_dbg_seq < 3) {
                         fprintf(stderr,
-                                "[D::ext_ev] read=%s n_raw=%u n_flt=%u "
-                                "n_seg=%u scale_est=%.4f "
-                                "pA_mean_est=%.2f adc_lo=%.1f adc_hi=%.1f\n",
+                                "[D::ext_ev] read=%s "
+                                "s_len=%u pA_sum=%.2f pA_mean_est=%.4f "
+                                "n_ev=%u adc_sum=%.2f adc_mean=%.4f "
+                                "scale=%.6f adc_lo=%.1f adc_hi=%.1f "
+                                "n_flt=%u n_seg=%u "
+                                "ev0=%.1f ev1=%.1f ev2=%.1f ev3=%.1f ev4=%.1f\n",
                                 qname ? qname : "(null)",
-                                ext_ev->n_events, n_flt, n_events,
-                                scale_est, pA_mean_est, adc_lo, adc_hi);
+                                (unsigned)s_len, pA_sum, pA_mean_est,
+                                ext_ev->n_events, adc_sum_all, adc_mean_all,
+                                scale_est, (double)adc_lo, (double)adc_hi,
+                                n_flt, n_events,
+                                ext_ev->n_events > 0 ? ext_ev->events[0] : 0.0f,
+                                ext_ev->n_events > 1 ? ext_ev->events[1] : 0.0f,
+                                ext_ev->n_events > 2 ? ext_ev->events[2] : 0.0f,
+                                ext_ev->n_events > 3 ? ext_ev->events[3] : 0.0f,
+                                ext_ev->n_events > 4 ? ext_ev->events[4] : 0.0f);
                 }
         } else if (ext_pk) {
                 /* External peaks: normalize signal, remap indices, run gen_events.
