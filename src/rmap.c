@@ -282,40 +282,31 @@ void ri_map_frag(const ri_idx_t *ri,
         const ri_ext_peaks_entry_t *ext_pk = ri_lookup_ext_peaks(opt->ext_peaks, qname);
 
         if (ext_ev) {
-                /* External events: z-score using raw signal statistics so that hashes
-                 * match the reference index, which was built with z-scored events.
-                 * Events in the file are treated as raw pA mean values per segment;
-                 * we apply the same global z-score normalization that normalize_signal()
-                 * uses internally, updating the running accumulators consistently. */
-                double sum = *mean_sum, sum2 = *std_dev_sum;
-                for (uint32_t i = 0; i < s_len; ++i) {
-                        sum  += sig[i];
-                        sum2 += sig[i] * (double)sig[i];
-                }
-                *n_events_sum += s_len;
-                *mean_sum     = sum;
-                *std_dev_sum  = sum2;
-                double sig_mean = 0.0, sig_std = 1.0;
-                if (*n_events_sum > 0) {
-                        sig_mean = sum / *n_events_sum;
-                        double var = sum2 / *n_events_sum - sig_mean * sig_mean;
-                        sig_std  = (var > 0.0) ? sqrt(var) : 1.0;
-                        if (sig_std < 1e-6) sig_std = 1.0;
-                }
+                /* External raw signal: the events file stores raw signal samples
+                 * (e.g. ADC integers or pA values) rather than pre-computed segment
+                 * means.  Feed them directly through detect_events — the same pipeline
+                 * used for POD5 signal — so the resulting z-scored segment means match
+                 * what the reference index was built with.
+                 *
+                 * Z-scoring is invariant to linear transforms, so ADC-scale input
+                 * produces identical z-scored output as pA-scale input (both give the
+                 * same segment-mean hashes).  The only minor difference is that the
+                 * 30–200 pA hard-filter applied during POD5 reading is absent here;
+                 * detect_events' own |z|<3 normalisation filter compensates for most
+                 * out-of-range samples. */
+                events = detect_events(b->km,
+                                       ext_ev->n_events, ext_ev->events,
+                                       opt->window_length1, opt->window_length2,
+                                       opt->threshold1, opt->threshold2, opt->peak_height,
+                                       opt->min_segment_length, opt->max_segment_length,
+                                       mean_sum, std_dev_sum, n_events_sum, &n_events);
 
-                n_events = ext_ev->n_events;
-                events = (float*)ri_kmalloc(b->km, n_events * sizeof(float));
-                for (uint32_t i = 0; i < n_events; ++i)
-                        events[i] = (float)((ext_ev->events[i] - sig_mean) / sig_std);
-
-                /* Diagnostic: log event stats for the first 3 matched reads so the
-                 * caller can determine whether events are already z-scored (~[-3,3])
-                 * or raw pA means (~50-200).  Thread-safe via atomic counter. */
+                /* Diagnostic: log for the first 3 matched reads. */
                 static volatile int ri_dbg_ev_cnt = 0;
                 int ri_dbg_seq = __sync_fetch_and_add(&ri_dbg_ev_cnt, 1);
                 if (ri_dbg_seq < 3) {
                         double ev_sum = 0.0, ev_sq = 0.0;
-                        uint32_t ns = n_events < 20 ? n_events : 20;
+                        uint32_t ns = ext_ev->n_events < 20 ? ext_ev->n_events : 20;
                         for (uint32_t i = 0; i < ns; ++i) {
                                 ev_sum += ext_ev->events[i];
                                 ev_sq  += ext_ev->events[i] * (double)ext_ev->events[i];
@@ -324,18 +315,17 @@ void ri_map_frag(const ri_idx_t *ri,
                         double ev_var_raw  = ev_sq / ns - ev_mean_raw * ev_mean_raw;
                         double ev_std_raw  = ev_var_raw > 0.0 ? sqrt(ev_var_raw) : 0.0;
                         fprintf(stderr,
-                                "[D::ext_ev] read=%s n_events=%u "
-                                "raw_ev_mean=%.4f raw_ev_std=%.4f "
-                                "sig_mean=%.4f sig_std=%.4f "
-                                "first5=%.4f,%.4f,%.4f,%.4f,%.4f\n",
-                                qname ? qname : "(null)", ext_ev->n_events,
+                                "[D::ext_ev] read=%s n_raw=%u n_seg_events=%u "
+                                "raw_mean=%.2f raw_std=%.2f "
+                                "first5=%.1f,%.1f,%.1f,%.1f,%.1f\n",
+                                qname ? qname : "(null)",
+                                ext_ev->n_events, n_events,
                                 ev_mean_raw, ev_std_raw,
-                                sig_mean, sig_std,
-                                n_events > 0 ? ext_ev->events[0] : 0.0f,
-                                n_events > 1 ? ext_ev->events[1] : 0.0f,
-                                n_events > 2 ? ext_ev->events[2] : 0.0f,
-                                n_events > 3 ? ext_ev->events[3] : 0.0f,
-                                n_events > 4 ? ext_ev->events[4] : 0.0f);
+                                ext_ev->n_events > 0 ? ext_ev->events[0] : 0.0f,
+                                ext_ev->n_events > 1 ? ext_ev->events[1] : 0.0f,
+                                ext_ev->n_events > 2 ? ext_ev->events[2] : 0.0f,
+                                ext_ev->n_events > 3 ? ext_ev->events[3] : 0.0f,
+                                ext_ev->n_events > 4 ? ext_ev->events[4] : 0.0f);
                 }
         } else if (ext_pk) {
                 /* External peaks: normalize signal, remap indices, run gen_events.
