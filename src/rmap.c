@@ -1,6 +1,5 @@
 #include "rmap.h"
 #include <assert.h>
-#include <stdatomic.h>
 #include "kthread.h"
 #include "rh_kvec.h"
 #include "rutils.h"
@@ -312,8 +311,8 @@ void ri_map_frag(const ri_idx_t *ri,
                 /* Diagnostic: log event stats for the first 3 matched reads so the
                  * caller can determine whether events are already z-scored (~[-3,3])
                  * or raw pA means (~50-200).  Thread-safe via atomic counter. */
-                static atomic_int ri_dbg_ev_cnt = 0;
-                int ri_dbg_seq = atomic_fetch_add(&ri_dbg_ev_cnt, 1);
+                static volatile int ri_dbg_ev_cnt = 0;
+                int ri_dbg_seq = __sync_fetch_and_add(&ri_dbg_ev_cnt, 1);
                 if (ri_dbg_seq < 3) {
                         double ev_sum = 0.0, ev_sq = 0.0;
                         uint32_t ns = n_events < 20 ? n_events : 20;
@@ -394,8 +393,8 @@ void ri_map_frag(const ri_idx_t *ri,
         if(n_events < opt->min_events) {
                 /* Diagnostic: warn once when ext_ev read has too few events. */
                 if (ext_ev) {
-                        static atomic_int ri_dbg_short_cnt = 0;
-                        if (atomic_fetch_add(&ri_dbg_short_cnt, 1) < 3)
+                        static volatile int ri_dbg_short_cnt = 0;
+                        if (__sync_fetch_and_add(&ri_dbg_short_cnt, 1) < 3)
                                 fprintf(stderr,
                                         "[D::ext_ev] read=%s SKIPPED: n_events=%u < min_events=%u\n",
                                         qname ? qname : "(null)", n_events, opt->min_events);
