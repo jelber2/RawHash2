@@ -282,90 +282,56 @@ void ri_map_frag(const ri_idx_t *ri,
         const ri_ext_peaks_entry_t *ext_pk = ri_lookup_ext_peaks(opt->ext_peaks, qname);
 
         if (ext_ev) {
-                /* The events file contains pre-computed segment means — one float per
-                 * segment, already segmented from the raw signal by some upstream tool.
-                 * The values are NOT z-scored; they are in the same linear units as the
-                 * raw signal (confirmed by s_len/n_events ratio ≈ 14 samples/segment).
+                /* The events file contains segment boundary POSITIONS (not signal
+                 * values).  Evidence: ev_mean / s_len ≈ 0.505 for every read, which
+                 * is exactly the expected average of positions uniformly distributed
+                 * in [0, s_len].  The ratio s_len/n_events ≈ 14 samples/segment also
+                 * confirms these are boundary positions, not one-per-sample values.
                  *
-                 * Strategy:
-                 *  1. Estimate the unit→pA scale from the ratio of the pA-filtered
-                 *     signal mean (from POD5, in sig[]) to the unfiltered events mean.
-                 *  2. Apply the [30, 200] pA equivalent filter in event-unit space.
-                 *  3. Z-score the filtered segment means directly.
-                 *     This is correct because z-scoring is linear:
-                 *       mean(z_i) = z(mean_i)
-                 *     so z-scoring pre-computed segment means produces the same values
-                 *     as detect_events' averaging of z-scored individual samples.
-                 *  4. Feed the z-scored array directly to ri_sketch (skip detect_events).
+                 * Positions are in the same filtered-pA signal space as sig[] because
+                 * no_sig_filter=0 for ext_events reads (the pA filter was applied when
+                 * reading the POD5 file, giving the sig[] and s_len passed here).
+                 *
+                 * Strategy: convert float positions → uint32_t, then call
+                 * detect_events_with_ext_peaks on sig[0..s_len] — the same filtered
+                 * pA signal the reference index was built from — to get z-scored
+                 * segment means that exactly match the reference hashes.
                  */
-
-                /* Step 1: pA mean from the already-filtered POD5 signal. */
-                double pA_sum = 0.0;
-                for (uint32_t i = 0; i < (uint32_t)s_len; ++i) pA_sum += sig[i];
-                double pA_mean_est = (s_len > 0) ? pA_sum / s_len : 93.0;
-
-                /* Step 2: unfiltered mean of all events. */
-                double ev_sum_all = 0.0;
-                for (uint32_t i = 0; i < ext_ev->n_events; ++i)
-                        ev_sum_all += ext_ev->events[i];
-                double ev_mean_all = (ext_ev->n_events > 0)
-                                        ? ev_sum_all / ext_ev->n_events : 1.0;
-
-                /* Step 3: estimate scale (pA per event unit) and filter bounds. */
-                double scale_est = (ev_mean_all > 0.0) ? pA_mean_est / ev_mean_all : 1.0;
-                float  ev_lo     = (float)(30.0  / scale_est);
-                float  ev_hi     = (float)(200.0 / scale_est);
-
-                /* Step 4: filter events to the [30, 200] pA equivalent range. */
-                float *flt_ev = (float*)ri_kmalloc(b->km,
-                                                   ext_ev->n_events * sizeof(float));
-                uint32_t n_flt = 0;
+                uint32_t *ev_peaks = (uint32_t*)ri_kmalloc(b->km,
+                                                           ext_ev->n_events * sizeof(uint32_t));
+                uint32_t n_ev_peaks = 0;
                 for (uint32_t i = 0; i < ext_ev->n_events; ++i) {
-                        float v = ext_ev->events[i];
-                        if (v > ev_lo && v < ev_hi)
-                                flt_ev[n_flt++] = v;
+                        uint32_t pos = (uint32_t)(ext_ev->events[i] + 0.5f);
+                        if (pos > 0 && pos < (uint32_t)s_len)
+                                ev_peaks[n_ev_peaks++] = pos;
                 }
 
-                /* Step 5: z-score the filtered segment means directly and store in
-                 * events[].  Downstream ri_sketch receives the same z-scored array
-                 * format as detect_events would have returned. */
-                if (n_flt > 1) {
-                        double sum_v = 0.0, sum_v2 = 0.0;
-                        for (uint32_t i = 0; i < n_flt; ++i) {
-                                sum_v  += flt_ev[i];
-                                sum_v2 += (double)flt_ev[i] * flt_ev[i];
-                        }
-                        double mean_v = sum_v / n_flt;
-                        double var_v  = sum_v2 / n_flt - mean_v * mean_v;
-                        double std_v  = (var_v > 0.0) ? sqrt(var_v) : 1.0;
-
-                        events = (float*)ri_kmalloc(b->km, n_flt * sizeof(float));
-                        for (n_events = 0; n_events < n_flt; ++n_events)
-                                events[n_events] = (float)((flt_ev[n_events] - mean_v) / std_v);
-                }
-                ri_kfree(b->km, flt_ev);
+                if (n_ev_peaks > 0)
+                        events = detect_events_with_ext_peaks(b->km, s_len, sig,
+                                                              ev_peaks, n_ev_peaks,
+                                                              opt->min_segment_length,
+                                                              opt->max_segment_length,
+                                                              mean_sum, std_dev_sum,
+                                                              n_events_sum, &n_events);
+                ri_kfree(b->km, ev_peaks);
 
                 /* Diagnostic: log for the first 3 matched reads. */
                 static volatile int ri_dbg_ev_cnt = 0;
                 int ri_dbg_seq = __sync_fetch_and_add(&ri_dbg_ev_cnt, 1);
                 if (ri_dbg_seq < 3) {
+                        float ev_last = ext_ev->n_events > 0
+                                        ? ext_ev->events[ext_ev->n_events - 1] : 0.0f;
                         fprintf(stderr,
                                 "[D::ext_ev] read=%s "
-                                "s_len=%u pA_mean=%.4f "
-                                "n_ev=%u ev_mean=%.1f "
-                                "scale=%.6f ev_lo=%.1f ev_hi=%.1f "
-                                "n_flt=%u n_zscore=%u "
-                                "ev0=%.1f ev1=%.1f ev2=%.1f ev3=%.1f ev4=%.1f\n",
+                                "s_len=%u n_ev=%u n_peaks=%u n_seg=%u "
+                                "ev0=%.0f ev1=%.0f ev4=%.0f ev_last=%.0f\n",
                                 qname ? qname : "(null)",
-                                (unsigned)s_len, pA_mean_est,
-                                ext_ev->n_events, ev_mean_all,
-                                scale_est, (double)ev_lo, (double)ev_hi,
-                                n_flt, n_events,
+                                (unsigned)s_len, ext_ev->n_events,
+                                n_ev_peaks, n_events,
                                 ext_ev->n_events > 0 ? ext_ev->events[0] : 0.0f,
                                 ext_ev->n_events > 1 ? ext_ev->events[1] : 0.0f,
-                                ext_ev->n_events > 2 ? ext_ev->events[2] : 0.0f,
-                                ext_ev->n_events > 3 ? ext_ev->events[3] : 0.0f,
-                                ext_ev->n_events > 4 ? ext_ev->events[4] : 0.0f);
+                                ext_ev->n_events > 4 ? ext_ev->events[4] : 0.0f,
+                                ev_last);
                 }
         } else if (ext_pk) {
                 /* External peaks: normalize signal, remap indices, run gen_events.
