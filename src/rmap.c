@@ -282,50 +282,73 @@ void ri_map_frag(const ri_idx_t *ri,
         const ri_ext_peaks_entry_t *ext_pk = ri_lookup_ext_peaks(opt->ext_peaks, qname);
 
         if (ext_ev) {
-                /* External raw signal: the events file stores raw signal samples
-                 * (e.g. ADC integers or pA values) rather than pre-computed segment
-                 * means.  Feed them directly through detect_events — the same pipeline
-                 * used for POD5 signal — so the resulting z-scored segment means match
-                 * what the reference index was built with.
+                /* The events file stores raw signal samples (ADC integers or pA
+                 * values).  The reference index was built from POD5 signal that was
+                 * first filtered to the [30, 200] pA window, then z-scored by
+                 * detect_events.  To produce matching hashes we must apply the same
+                 * filter before calling detect_events.
                  *
-                 * Z-scoring is invariant to linear transforms, so ADC-scale input
-                 * produces identical z-scored output as pA-scale input (both give the
-                 * same segment-mean hashes).  The only minor difference is that the
-                 * 30–200 pA hard-filter applied during POD5 reading is absent here;
-                 * detect_events' own |z|<3 normalisation filter compensates for most
-                 * out-of-range samples. */
-                events = detect_events(b->km,
-                                       ext_ev->n_events, ext_ev->events,
-                                       opt->window_length1, opt->window_length2,
-                                       opt->threshold1, opt->threshold2, opt->peak_height,
-                                       opt->min_segment_length, opt->max_segment_length,
-                                       mean_sum, std_dev_sum, n_events_sum, &n_events);
+                 * We estimate the ADC→pA scale from the ratio of the pA-filtered
+                 * signal mean (available in sig[]) to the unfiltered ADC mean from
+                 * the events file.  The [30, 200] pA bounds are then converted to
+                 * ADC space.  Because z-scoring is a linear transform and is
+                 * scale-invariant, filtered-ADC z-scores are identical to filtered-pA
+                 * z-scores, so the resulting segment-mean hashes match the index.
+                 */
+
+                /* Step 1: pA mean from the already-filtered POD5 signal. */
+                double pA_sum = 0.0;
+                for (uint32_t i = 0; i < (uint32_t)s_len; ++i) pA_sum += sig[i];
+                double pA_mean_est = (s_len > 0) ? pA_sum / s_len : 93.0;
+
+                /* Step 2: unfiltered ADC mean from the events file. */
+                double adc_sum_all = 0.0;
+                for (uint32_t i = 0; i < ext_ev->n_events; ++i)
+                        adc_sum_all += ext_ev->events[i];
+                double adc_mean_all = (ext_ev->n_events > 0)
+                                        ? adc_sum_all / ext_ev->n_events : 1.0;
+
+                /* Step 3: estimate scale (pA per ADC count) and filter bounds. */
+                double scale_est = (adc_mean_all > 0.0) ? pA_mean_est / adc_mean_all : 1.0;
+                float  adc_lo    = (float)(30.0  / scale_est);
+                float  adc_hi    = (float)(200.0 / scale_est);
+
+                /* Step 4: copy events passing the ADC-equivalent [30, 200] pA filter. */
+                float *flt_sig = (float*)ri_kmalloc(b->km,
+                                                    ext_ev->n_events * sizeof(float));
+                uint32_t n_flt = 0;
+                for (uint32_t i = 0; i < ext_ev->n_events; ++i) {
+                        float v = ext_ev->events[i];
+                        if (v > adc_lo && v < adc_hi)
+                                flt_sig[n_flt++] = v;
+                }
+
+                /* Step 5: detect_events on filtered ADC signal using local accumulators
+                 * so pA-scale running sums in the caller are not contaminated. */
+                if (n_flt > 0) {
+                        double loc_mean = 0.0, loc_std = 0.0;
+                        uint32_t loc_n = 0;
+                        events = detect_events(b->km, n_flt, flt_sig,
+                                               opt->window_length1, opt->window_length2,
+                                               opt->threshold1, opt->threshold2,
+                                               opt->peak_height,
+                                               opt->min_segment_length,
+                                               opt->max_segment_length,
+                                               &loc_mean, &loc_std, &loc_n, &n_events);
+                }
+                ri_kfree(b->km, flt_sig);
 
                 /* Diagnostic: log for the first 3 matched reads. */
                 static volatile int ri_dbg_ev_cnt = 0;
                 int ri_dbg_seq = __sync_fetch_and_add(&ri_dbg_ev_cnt, 1);
                 if (ri_dbg_seq < 3) {
-                        double ev_sum = 0.0, ev_sq = 0.0;
-                        uint32_t ns = ext_ev->n_events < 20 ? ext_ev->n_events : 20;
-                        for (uint32_t i = 0; i < ns; ++i) {
-                                ev_sum += ext_ev->events[i];
-                                ev_sq  += ext_ev->events[i] * (double)ext_ev->events[i];
-                        }
-                        double ev_mean_raw = ev_sum / ns;
-                        double ev_var_raw  = ev_sq / ns - ev_mean_raw * ev_mean_raw;
-                        double ev_std_raw  = ev_var_raw > 0.0 ? sqrt(ev_var_raw) : 0.0;
                         fprintf(stderr,
-                                "[D::ext_ev] read=%s n_raw=%u n_seg_events=%u "
-                                "raw_mean=%.2f raw_std=%.2f "
-                                "first5=%.1f,%.1f,%.1f,%.1f,%.1f\n",
+                                "[D::ext_ev] read=%s n_raw=%u n_flt=%u "
+                                "n_seg=%u scale_est=%.4f "
+                                "pA_mean_est=%.2f adc_lo=%.1f adc_hi=%.1f\n",
                                 qname ? qname : "(null)",
-                                ext_ev->n_events, n_events,
-                                ev_mean_raw, ev_std_raw,
-                                ext_ev->n_events > 0 ? ext_ev->events[0] : 0.0f,
-                                ext_ev->n_events > 1 ? ext_ev->events[1] : 0.0f,
-                                ext_ev->n_events > 2 ? ext_ev->events[2] : 0.0f,
-                                ext_ev->n_events > 3 ? ext_ev->events[3] : 0.0f,
-                                ext_ev->n_events > 4 ? ext_ev->events[4] : 0.0f);
+                                ext_ev->n_events, n_flt, n_events,
+                                scale_est, pA_mean_est, adc_lo, adc_hi);
                 }
         } else if (ext_pk) {
                 /* External peaks: normalize signal, remap indices, run gen_events.
