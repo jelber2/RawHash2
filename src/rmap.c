@@ -282,18 +282,21 @@ void ri_map_frag(const ri_idx_t *ri,
         const ri_ext_peaks_entry_t *ext_pk = ri_lookup_ext_peaks(opt->ext_peaks, qname);
 
         if (ext_ev) {
-                /* The events file stores raw signal samples (ADC integers or pA
-                 * values).  The reference index was built from POD5 signal that was
-                 * first filtered to the [30, 200] pA window, then z-scored by
-                 * detect_events.  To produce matching hashes we must apply the same
-                 * filter before calling detect_events.
+                /* The events file contains pre-computed segment means — one float per
+                 * segment, already segmented from the raw signal by some upstream tool.
+                 * The values are NOT z-scored; they are in the same linear units as the
+                 * raw signal (confirmed by s_len/n_events ratio ≈ 14 samples/segment).
                  *
-                 * We estimate the ADC→pA scale from the ratio of the pA-filtered
-                 * signal mean (available in sig[]) to the unfiltered ADC mean from
-                 * the events file.  The [30, 200] pA bounds are then converted to
-                 * ADC space.  Because z-scoring is a linear transform and is
-                 * scale-invariant, filtered-ADC z-scores are identical to filtered-pA
-                 * z-scores, so the resulting segment-mean hashes match the index.
+                 * Strategy:
+                 *  1. Estimate the unit→pA scale from the ratio of the pA-filtered
+                 *     signal mean (from POD5, in sig[]) to the unfiltered events mean.
+                 *  2. Apply the [30, 200] pA equivalent filter in event-unit space.
+                 *  3. Z-score the filtered segment means directly.
+                 *     This is correct because z-scoring is linear:
+                 *       mean(z_i) = z(mean_i)
+                 *     so z-scoring pre-computed segment means produces the same values
+                 *     as detect_events' averaging of z-scored individual samples.
+                 *  4. Feed the z-scored array directly to ri_sketch (skip detect_events).
                  */
 
                 /* Step 1: pA mean from the already-filtered POD5 signal. */
@@ -301,42 +304,46 @@ void ri_map_frag(const ri_idx_t *ri,
                 for (uint32_t i = 0; i < (uint32_t)s_len; ++i) pA_sum += sig[i];
                 double pA_mean_est = (s_len > 0) ? pA_sum / s_len : 93.0;
 
-                /* Step 2: unfiltered ADC mean from the events file. */
-                double adc_sum_all = 0.0;
+                /* Step 2: unfiltered mean of all events. */
+                double ev_sum_all = 0.0;
                 for (uint32_t i = 0; i < ext_ev->n_events; ++i)
-                        adc_sum_all += ext_ev->events[i];
-                double adc_mean_all = (ext_ev->n_events > 0)
-                                        ? adc_sum_all / ext_ev->n_events : 1.0;
+                        ev_sum_all += ext_ev->events[i];
+                double ev_mean_all = (ext_ev->n_events > 0)
+                                        ? ev_sum_all / ext_ev->n_events : 1.0;
 
-                /* Step 3: estimate scale (pA per ADC count) and filter bounds. */
-                double scale_est = (adc_mean_all > 0.0) ? pA_mean_est / adc_mean_all : 1.0;
-                float  adc_lo    = (float)(30.0  / scale_est);
-                float  adc_hi    = (float)(200.0 / scale_est);
+                /* Step 3: estimate scale (pA per event unit) and filter bounds. */
+                double scale_est = (ev_mean_all > 0.0) ? pA_mean_est / ev_mean_all : 1.0;
+                float  ev_lo     = (float)(30.0  / scale_est);
+                float  ev_hi     = (float)(200.0 / scale_est);
 
-                /* Step 4: copy events passing the ADC-equivalent [30, 200] pA filter. */
-                float *flt_sig = (float*)ri_kmalloc(b->km,
-                                                    ext_ev->n_events * sizeof(float));
+                /* Step 4: filter events to the [30, 200] pA equivalent range. */
+                float *flt_ev = (float*)ri_kmalloc(b->km,
+                                                   ext_ev->n_events * sizeof(float));
                 uint32_t n_flt = 0;
                 for (uint32_t i = 0; i < ext_ev->n_events; ++i) {
                         float v = ext_ev->events[i];
-                        if (v > adc_lo && v < adc_hi)
-                                flt_sig[n_flt++] = v;
+                        if (v > ev_lo && v < ev_hi)
+                                flt_ev[n_flt++] = v;
                 }
 
-                /* Step 5: detect_events on filtered ADC signal using local accumulators
-                 * so pA-scale running sums in the caller are not contaminated. */
-                if (n_flt > 0) {
-                        double loc_mean = 0.0, loc_std = 0.0;
-                        uint32_t loc_n = 0;
-                        events = detect_events(b->km, n_flt, flt_sig,
-                                               opt->window_length1, opt->window_length2,
-                                               opt->threshold1, opt->threshold2,
-                                               opt->peak_height,
-                                               opt->min_segment_length,
-                                               opt->max_segment_length,
-                                               &loc_mean, &loc_std, &loc_n, &n_events);
+                /* Step 5: z-score the filtered segment means directly and store in
+                 * events[].  Downstream ri_sketch receives the same z-scored array
+                 * format as detect_events would have returned. */
+                if (n_flt > 1) {
+                        double sum_v = 0.0, sum_v2 = 0.0;
+                        for (uint32_t i = 0; i < n_flt; ++i) {
+                                sum_v  += flt_ev[i];
+                                sum_v2 += (double)flt_ev[i] * flt_ev[i];
+                        }
+                        double mean_v = sum_v / n_flt;
+                        double var_v  = sum_v2 / n_flt - mean_v * mean_v;
+                        double std_v  = (var_v > 0.0) ? sqrt(var_v) : 1.0;
+
+                        events = (float*)ri_kmalloc(b->km, n_flt * sizeof(float));
+                        for (n_events = 0; n_events < n_flt; ++n_events)
+                                events[n_events] = (float)((flt_ev[n_events] - mean_v) / std_v);
                 }
-                ri_kfree(b->km, flt_sig);
+                ri_kfree(b->km, flt_ev);
 
                 /* Diagnostic: log for the first 3 matched reads. */
                 static volatile int ri_dbg_ev_cnt = 0;
@@ -344,15 +351,15 @@ void ri_map_frag(const ri_idx_t *ri,
                 if (ri_dbg_seq < 3) {
                         fprintf(stderr,
                                 "[D::ext_ev] read=%s "
-                                "s_len=%u pA_sum=%.2f pA_mean_est=%.4f "
-                                "n_ev=%u adc_sum=%.2f adc_mean=%.4f "
-                                "scale=%.6f adc_lo=%.1f adc_hi=%.1f "
-                                "n_flt=%u n_seg=%u "
+                                "s_len=%u pA_mean=%.4f "
+                                "n_ev=%u ev_mean=%.1f "
+                                "scale=%.6f ev_lo=%.1f ev_hi=%.1f "
+                                "n_flt=%u n_zscore=%u "
                                 "ev0=%.1f ev1=%.1f ev2=%.1f ev3=%.1f ev4=%.1f\n",
                                 qname ? qname : "(null)",
-                                (unsigned)s_len, pA_sum, pA_mean_est,
-                                ext_ev->n_events, adc_sum_all, adc_mean_all,
-                                scale_est, (double)adc_lo, (double)adc_hi,
+                                (unsigned)s_len, pA_mean_est,
+                                ext_ev->n_events, ev_mean_all,
+                                scale_est, (double)ev_lo, (double)ev_hi,
                                 n_flt, n_events,
                                 ext_ev->n_events > 0 ? ext_ev->events[0] : 0.0f,
                                 ext_ev->n_events > 1 ? ext_ev->events[1] : 0.0f,
